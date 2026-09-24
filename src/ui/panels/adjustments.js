@@ -344,9 +344,11 @@ export function showFilterPanel(session, filterType = 'gaussian') {
   let blurRadius = 4, noiseAmt = 0;
   let motionAngle = 0, motionDist = 20;
   let radialAmount = 10;
+  let rafId = null;
 
   const apply = () => {
     const ctx = layer.ctx;
+    if (!ctx) return;
     ctx.clearRect(0, 0, layer.pixelW, layer.pixelH);
 
     if (blurType === 'gaussian') {
@@ -355,83 +357,61 @@ export function showFilterPanel(session, filterType = 'gaussian') {
       ctx.drawImage(origCanvas, 0, 0);
       ctx.restore();
     } else if (blurType === 'motion') {
-      // Motion Blur: directional averaging
-      ctx.drawImage(origCanvas, 0, 0);
+      // GPU-Accelerated Motion Blur: multi-pass directional accumulation
       if (motionDist > 0) {
-        const imgData = ctx.getImageData(0, 0, layer.pixelW, layer.pixelH);
-        const src = new Uint8ClampedArray(imgData.data);
-        const d = imgData.data;
-        const w = layer.pixelW, h = layer.pixelH;
+        const passes = Math.min(24, Math.max(4, Math.round(motionDist)));
         const rad = (motionAngle * Math.PI) / 180;
         const dx = Math.cos(rad), dy = Math.sin(rad);
-        const halfDist = Math.floor(motionDist / 2);
-        const sampleCount = motionDist;
+        const halfDist = motionDist / 2;
 
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            let sumR = 0, sumG = 0, sumB = 0, sumA = 0, cnt = 0;
-            for (let s = -halfDist; s < -halfDist + sampleCount; s++) {
-              const sx = Math.round(x + dx * s);
-              const sy = Math.round(y + dy * s);
-              if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
-                const si = (sy * w + sx) * 4;
-                sumR += src[si]; sumG += src[si + 1]; sumB += src[si + 2]; sumA += src[si + 3];
-                cnt++;
-              }
-            }
-            if (cnt > 0) {
-              const i = (y * w + x) * 4;
-              d[i] = sumR / cnt; d[i + 1] = sumG / cnt; d[i + 2] = sumB / cnt; d[i + 3] = sumA / cnt;
-            }
-          }
+        ctx.save();
+        ctx.globalAlpha = 1 / passes;
+        for (let i = 0; i < passes; i++) {
+          const t = (i / (passes - 1 || 1)) * motionDist - halfDist;
+          ctx.drawImage(origCanvas, Math.round(dx * t), Math.round(dy * t));
         }
-        ctx.putImageData(imgData, 0, 0);
+        ctx.restore();
+      } else {
+        ctx.drawImage(origCanvas, 0, 0);
       }
     } else if (blurType === 'radial') {
-      // Radial (Zoom) Blur: average along radial lines from center
-      ctx.drawImage(origCanvas, 0, 0);
+      // GPU-Accelerated Radial (Zoom) Blur: multi-pass centered scale accumulation
       if (radialAmount > 0) {
-        const imgData = ctx.getImageData(0, 0, layer.pixelW, layer.pixelH);
-        const src = new Uint8ClampedArray(imgData.data);
-        const d = imgData.data;
-        const w = layer.pixelW, h = layer.pixelH;
-        const cx = w / 2, cy = h / 2;
-        const samples = Math.max(2, Math.min(radialAmount, 40));
+        const passes = Math.min(20, Math.max(4, Math.round(radialAmount)));
+        const cx = layer.pixelW / 2, cy = layer.pixelH / 2;
+        const maxZoom = 1 + (radialAmount / 100);
 
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            let sumR = 0, sumG = 0, sumB = 0, sumA = 0, cnt = 0;
-            const vx = x - cx, vy = y - cy;
-            for (let s = 0; s < samples; s++) {
-              const scale = 1 + (s / samples) * (radialAmount / 100);
-              const sx = Math.round(cx + vx * scale);
-              const sy = Math.round(cy + vy * scale);
-              if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
-                const si = (sy * w + sx) * 4;
-                sumR += src[si]; sumG += src[si + 1]; sumB += src[si + 2]; sumA += src[si + 3];
-                cnt++;
-              }
-            }
-            if (cnt > 0) {
-              const i = (y * w + x) * 4;
-              d[i] = sumR / cnt; d[i + 1] = sumG / cnt; d[i + 2] = sumB / cnt; d[i + 3] = sumA / cnt;
-            }
-          }
+        ctx.save();
+        ctx.globalAlpha = 1 / passes;
+        for (let i = 0; i < passes; i++) {
+          const scale = 1 + (i / (passes - 1 || 1)) * (maxZoom - 1);
+          const nw = layer.pixelW * scale;
+          const nh = layer.pixelH * scale;
+          const nx = cx - nw / 2;
+          const ny = cy - nh / 2;
+          ctx.drawImage(origCanvas, nx, ny, nw, nh);
         }
-        ctx.putImageData(imgData, 0, 0);
+        ctx.restore();
+      } else {
+        ctx.drawImage(origCanvas, 0, 0);
       }
     }
 
-    // Add noise if selected
+    // Fast Noise pass using 32-bit typed buffer
     if (noiseAmt > 0) {
       const imgData = ctx.getImageData(0, 0, layer.pixelW, layer.pixelH);
-      const d = imgData.data;
-      const len = d.length;
-      for (let i = 0; i < len; i += 4) {
-        const rand = (Math.random() - 0.5) * noiseAmt * 2.55;
-        d[i]     = Math.max(0, Math.min(255, d[i] + rand));
-        d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + rand));
-        d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + rand));
+      const d32 = new Uint32Array(imgData.data.buffer);
+      const nScaled = Math.round(noiseAmt * 2.55);
+      let seed = 123456789;
+      const len = d32.length;
+      for (let i = 0; i < len; i++) {
+        seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+        const rand = ((seed & 0xFF) - 128) * (nScaled / 128);
+        const r = Math.max(0, Math.min(255, (d32[i] & 0xFF) + rand));
+        const g = Math.max(0, Math.min(255, ((d32[i] >> 8) & 0xFF) + rand));
+        const b = Math.max(0, Math.min(255, ((d32[i] >> 16) & 0xFF) + rand));
+        const a = (d32[i] >> 24) & 0xFF;
+        d32[i] = (a << 24) | (b << 16) | (g << 8) | r;
       }
       ctx.putImageData(imgData, 0, 0);
     }
@@ -440,11 +420,32 @@ export function showFilterPanel(session, filterType = 'gaussian') {
     session._emit('canvas-dirty');
   };
 
-  const { body } = createModal('Blur & Filters', () => {
-    session.beginEdit('Blur Filter');
+  const scheduleApply = () => {
+    if (typeof requestAnimationFrame === 'undefined') {
+      apply();
+      return;
+    }
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(() => {
+      apply();
+      rafId = null;
+    });
+  };
+
+  const titleMap = {
+    gaussian: 'Gaussian Blur',
+    motion: 'Motion Blur',
+    radial: 'Radial Blur',
+  };
+  const modalTitle = titleMap[blurType] || 'Blur Filter';
+
+  const { body } = createModal(modalTitle, () => {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    session.beginEdit(modalTitle);
     apply();
     session.endEdit();
   }, () => {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     const ctx = layer.ctx;
     ctx.clearRect(0, 0, layer.pixelW, layer.pixelH);
     ctx.drawImage(origCanvas, 0, 0);
@@ -473,20 +474,20 @@ export function showFilterPanel(session, filterType = 'gaussian') {
   const renderControls = () => {
     controlsContainer.innerHTML = '';
     if (blurType === 'gaussian') {
-      addSlider(controlsContainer, 'Radius (px)', 0, 40, blurRadius, 1, v => { blurRadius = v; apply(); });
+      addSlider(controlsContainer, 'Radius (px)', 0, 40, blurRadius, 1, v => { blurRadius = v; scheduleApply(); });
     } else if (blurType === 'motion') {
-      addSlider(controlsContainer, 'Angle (°)', -90, 90, motionAngle, 1, v => { motionAngle = v; apply(); });
-      addSlider(controlsContainer, 'Distance (px)', 1, 100, motionDist, 1, v => { motionDist = v; apply(); });
+      addSlider(controlsContainer, 'Angle (°)', -90, 90, motionAngle, 1, v => { motionAngle = v; scheduleApply(); });
+      addSlider(controlsContainer, 'Distance (px)', 1, 100, motionDist, 1, v => { motionDist = v; scheduleApply(); });
     } else if (blurType === 'radial') {
-      addSlider(controlsContainer, 'Amount', 1, 50, radialAmount, 1, v => { radialAmount = v; apply(); });
+      addSlider(controlsContainer, 'Amount', 1, 50, radialAmount, 1, v => { radialAmount = v; scheduleApply(); });
     }
-    addSlider(controlsContainer, 'Noise (%)', 0, 100, noiseAmt, 1, v => { noiseAmt = v; apply(); });
+    addSlider(controlsContainer, 'Noise (%)', 0, 100, noiseAmt, 1, v => { noiseAmt = v; scheduleApply(); });
   };
 
   body.querySelector('#blur-type-sel').addEventListener('change', (e) => {
     blurType = e.target.value;
     renderControls();
-    apply();
+    scheduleApply();
   });
 
   renderControls();

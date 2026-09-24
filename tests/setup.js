@@ -60,6 +60,16 @@ class MockContext2D {
   setLineDash() {}
   measureText(text) { return { width: (text || '').length * 7 }; }
   createPattern(src, repeat) { return { src, repeat }; }
+  createLinearGradient(x0, y0, x1, y1) {
+    return {
+      addColorStop(offset, color) {},
+    };
+  }
+  createRadialGradient(x0, y0, r0, x1, y1, r1) {
+    return {
+      addColorStop(offset, color) {},
+    };
+  }
   fillText() {}
   strokeText() {}
 
@@ -160,28 +170,31 @@ class MockContext2D {
 
 class MockCanvas {
   constructor(w = 300, h = 150) {
-    this._width = w;
-    this._height = h;
-    this._buffer = new Uint8ClampedArray(w * h * 4);
+    this._width = Math.max(1, Math.round(w));
+    this._height = Math.max(1, Math.round(h));
+    this._buffer = null;
     this._ctx = null;
     this.style = {};
+    this.dataset = {};
+    this.setPointerCapture = () => {};
     this.classList = { add() {}, remove() {}, contains() { return false; } };
   }
 
   get width() { return this._width; }
   set width(v) {
     this._width = Math.max(1, Math.round(v));
-    this._buffer = new Uint8ClampedArray(this._width * this._height * 4);
+    this._buffer = null;
   }
 
   get height() { return this._height; }
   set height(v) {
     this._height = Math.max(1, Math.round(v));
-    this._buffer = new Uint8ClampedArray(this._width * this._height * 4);
+    this._buffer = null;
   }
 
   getContext(type) {
     if (type === '2d') {
+      if (!this._buffer) this._buffer = new Uint8ClampedArray(this.width * this.height * 4);
       if (!this._ctx) this._ctx = new MockContext2D(this);
       return this._ctx;
     }
@@ -194,6 +207,10 @@ class MockCanvas {
 
   addEventListener() {}
   removeEventListener() {}
+  querySelector() { return new MockElement('div'); }
+  getBoundingClientRect() {
+    return { left: 0, top: 0, width: this._width, height: this._height, right: this._width, bottom: this._height };
+  }
 }
 
 class MockElement {
@@ -201,24 +218,168 @@ class MockElement {
     this.tagName = tagName.toUpperCase();
     this.style = {};
     this.children = [];
+    this.parentNode = null;
     this.dataset = {};
+    this.id = '';
+    this.className = '';
+    this._listeners = {};
+    this._innerHTML = '';
     this.classList = {
       _classes: new Set(),
-      add(c) { this._classes.add(c); },
-      remove(c) { this._classes.delete(c); },
-      contains(c) { return this._classes.has(c); },
-      toggle(c) { if (this._classes.has(c)) this._classes.delete(c); else this._classes.add(c); }
+      add: (...cls) => cls.forEach(c => this.classList._classes.add(c)),
+      remove: (...cls) => cls.forEach(c => this.classList._classes.delete(c)),
+      contains: (c) => this.classList._classes.has(c),
+      toggle: (c) => { if (this.classList._classes.has(c)) this.classList._classes.delete(c); else this.classList._classes.add(c); }
     };
     this.clientWidth = 1280;
     this.clientHeight = 800;
   }
 
-  appendChild(child) { this.children.push(child); return child; }
-  removeChild(child) { this.children = this.children.filter(c => c !== child); return child; }
-  querySelector() { return new MockElement('div'); }
-  querySelectorAll() { return []; }
-  addEventListener() {}
-  removeEventListener() {}
+  get innerHTML() {
+    return this._innerHTML;
+  }
+
+  set innerHTML(val) {
+    this._innerHTML = String(val);
+    this.children = [];
+    const tagMatches = String(val).matchAll(/<([a-zA-Z0-9\-]+)([^>]*)>(.*?)<\/\1>|<([a-zA-Z0-9\-]+)([^>]*)\/?>/gs);
+    for (const match of tagMatches) {
+      const tag = match[1] || match[4];
+      const attrs = match[2] || match[5] || '';
+      const text = match[3] || '';
+      const child = new MockElement(tag);
+      const idM = attrs.match(/id=["']([^"']+)["']/);
+      if (idM) child.id = idM[1];
+      const classM = attrs.match(/class=["']([^"']+)["']/);
+      if (classM) {
+        child.className = classM[1];
+        classM[1].split(/\s+/).filter(Boolean).forEach(c => child.classList.add(c));
+      }
+      child.textContent = text.replace(/<[^>]+>/g, '').trim();
+      if (text.includes('<')) {
+        child.innerHTML = text;
+      } else {
+        child._innerHTML = text;
+      }
+      this.appendChild(child);
+    }
+  }
+
+  get textContent() {
+    if (this.children.length === 0) return this._innerHTML ? this._innerHTML.replace(/<[^>]+>/g, '') : '';
+    return this.children.map(c => c.textContent).join(' ') + ' ' + (this._innerHTML ? this._innerHTML.replace(/<[^>]+>/g, '') : '');
+  }
+
+  set textContent(val) {
+    this._innerHTML = String(val);
+    this.children = [];
+  }
+
+  appendChild(child) {
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
+
+  removeChild(child) {
+    this.children = this.children.filter(c => c !== child);
+    if (child) child.parentNode = null;
+    return child;
+  }
+
+  remove() {
+    if (this.parentNode) {
+      this.parentNode.removeChild(this);
+    }
+  }
+
+  setAttribute(k, v) {
+    this[k] = v;
+    if (k === 'id') this.id = v;
+    if (k === 'class') {
+      this.className = v;
+      v.split(/\s+/).filter(Boolean).forEach(c => this.classList.add(c));
+    }
+  }
+
+  getAttribute(k) {
+    return this[k] ?? null;
+  }
+
+  querySelector(selector) {
+    if (!selector) return null;
+    if (selector.startsWith('#')) {
+      const targetId = selector.slice(1);
+      const search = (el) => {
+        if (el.id === targetId) return el;
+        for (const child of el.children) {
+          const res = search(child);
+          if (res) return res;
+        }
+        return null;
+      };
+      return search(this);
+    }
+    if (selector.startsWith('.')) {
+      const targetClass = selector.slice(1);
+      const search = (el) => {
+        if (el.classList.contains(targetClass) || (el.className && el.className.split(/\s+/).includes(targetClass))) return el;
+        for (const child of el.children) {
+          const res = search(child);
+          if (res) return res;
+        }
+        return null;
+      };
+      return search(this);
+    }
+    const search = (el) => {
+      if (el.tagName.toLowerCase() === selector.toLowerCase()) return el;
+      for (const child of el.children) {
+        const res = search(child);
+        if (res) return res;
+      }
+      return null;
+    };
+    return search(this);
+  }
+
+  querySelectorAll(selector) {
+    const results = [];
+    if (!selector) return results;
+    const targetClass = selector.startsWith('.') ? selector.slice(1) : null;
+    const targetId = selector.startsWith('#') ? selector.slice(1) : null;
+    const search = (el) => {
+      if (targetClass && (el.classList.contains(targetClass) || (el.className && el.className.split(/\s+/).includes(targetClass)))) results.push(el);
+      else if (targetId && el.id === targetId) results.push(el);
+      else if (!targetClass && !targetId && el.tagName.toLowerCase() === selector.toLowerCase()) results.push(el);
+      for (const child of el.children) {
+        search(child);
+      }
+    };
+    for (const child of this.children) search(child);
+    return results;
+  }
+
+  addEventListener(event, fn) {
+    if (!this._listeners[event]) this._listeners[event] = [];
+    this._listeners[event].push(fn);
+  }
+
+  removeEventListener(event, fn) {
+    if (this._listeners[event]) {
+      this._listeners[event] = this._listeners[event].filter(h => h !== fn);
+    }
+  }
+
+  click() {
+    const event = { target: this, preventDefault() {}, stopPropagation() {} };
+    for (const fn of (this._listeners['click'] || [])) {
+      fn(event);
+    }
+  }
+
+  focus() {}
+
   getBoundingClientRect() {
     return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight, right: this.clientWidth, bottom: this.clientHeight };
   }
@@ -230,19 +391,33 @@ if (typeof globalThis.ImageData === 'undefined') {
 }
 
 if (typeof globalThis.document === 'undefined') {
+  const rootBody = new MockElement('body');
+  const modalRoot = new MockElement('div');
+  modalRoot.id = 'modal-root';
+  rootBody.appendChild(modalRoot);
+
   globalThis.document = {
+    body: rootBody,
+    _docListeners: {},
     createElement(tagName) {
       if (tagName.toLowerCase() === 'canvas') return new MockCanvas(300, 150);
       return new MockElement(tagName);
     },
     getElementById(id) {
       if (id.includes('canvas') || id.includes('ruler')) return new MockCanvas(800, 600);
-      return new MockElement('div');
+      return rootBody.querySelector(`#${id}`) || new MockElement('div');
     },
-    querySelector() { return new MockElement('div'); },
-    querySelectorAll() { return []; },
-    addEventListener() {},
-    removeEventListener() {},
+    querySelector(sel) { return rootBody.querySelector(sel); },
+    querySelectorAll(sel) { return rootBody.querySelectorAll(sel); },
+    addEventListener(event, fn) {
+      if (!this._docListeners[event]) this._docListeners[event] = [];
+      this._docListeners[event].push(fn);
+    },
+    removeEventListener(event, fn) {
+      if (this._docListeners[event]) {
+        this._docListeners[event] = this._docListeners[event].filter(h => h !== fn);
+      }
+    },
   };
 }
 
@@ -254,6 +429,15 @@ if (typeof globalThis.window === 'undefined') {
     removeEventListener() {},
     api: null,
   };
+}
+
+if (typeof globalThis.requestAnimationFrame === 'undefined') {
+  globalThis.requestAnimationFrame = (cb) => {
+    const t = setTimeout(cb, 0);
+    if (t && typeof t.unref === 'function') t.unref();
+    return t;
+  };
+  globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 }
 
 if (typeof globalThis.localStorage === 'undefined') {

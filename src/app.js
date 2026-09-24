@@ -9,11 +9,14 @@ import { Toolbar        } from './ui/toolbar.js';
 import { Inspector      } from './ui/inspector.js';
 import { CanvasView     } from './ui/canvas.js';
 import { LayersPanel    } from './ui/layers.js';
-import { showNewCanvasPanel, getDefaultCanvasSettings } from './ui/panels/newCanvas.js';
+import { showNewCanvasPanel, getDefaultCanvasSettings, getShowOnStartup } from './ui/panels/newCanvas.js';
 import { showJpegExportPanel, showPngExportPanel } from './ui/panels/jpegExport.js';
 import { showImageSizePanel, showCanvasSizePanel } from './ui/panels/imageSize.js';
 import { showLevelsPanel, showHueSatPanel, showExposurePanel, showFilterPanel } from './ui/panels/adjustments.js';
 import { showPrintPreviewPanel } from './ui/panels/printPreview.js';
+import { promptDeleteLayers } from './ui/panels/layerDialogs.js';
+import { showClipartPanel } from './ui/panels/clipartPanel.js';
+import { showWordArtPanel } from './ui/panels/wordartPanel.js';
 import { removeBackground } from './ai/backgroundRemoval.js';
 import { saveProject, loadProject } from './io/project.js';
 
@@ -38,7 +41,8 @@ function onTabChange(newSession) {
 
 /** Tool hint strings (matches macOS original's status bar) */
 const TOOL_HINTS = {
-  [Tool.MOVE]:        'Drag to move · Handles to resize · Circle to rotate · 1–0 layer opacity · Space to pan',
+  [Tool.CURSOR]:      'Click to select · Marquee drag to select multiple layers · Double-click to edit · Space to pan',
+  [Tool.MOVE]:        'Drag to move · Handles to scale · Rotation knob to rotate · Center on canvas · Space to pan',
   [Tool.BRUSH]:       'Drag to paint · [ ] size · Shift-[ ] hardness · 1–0 opacity · Space to pan',
   [Tool.ERASER]:      'Drag to erase · [ ] size · Shift-[ ] hardness · 1–0 opacity · Space to pan',
   [Tool.BUCKET]:      'Click to flood-fill contiguous area · Tolerance and Sample All in inspector · Space to pan',
@@ -50,6 +54,7 @@ const TOOL_HINTS = {
   [Tool.MARQUEE]:     'Drag a rectangle · Shift square · Drag inside to move · Delete clears · Ctrl+D deselect',
   [Tool.LASSO]:       'Drag to select · Delete clears · Ctrl+D deselect',
   [Tool.WAND]:        'Click to select similar colors · Shift add · Delete clears · Ctrl+D deselect',
+  [Tool.TEXT]:        'Click or drag to add text · Esc cancel · Space to pan',
   [Tool.HAND]:        'Drag to pan · Pinch to zoom',
   [Tool.ZOOM]:        'Click to zoom in · Alt-click to zoom out · Drag to zoom smoothly · Space to pan',
   [Tool.HEAL]:        'Drag over blemishes to heal · [ ] size · Space to pan',
@@ -122,7 +127,19 @@ document.addEventListener('DOMContentLoaded', () => {
   );
 
   // Initialise components
-  tabs        = new TabStrip(onTabChange);
+  tabs        = new TabStrip(onTabChange, {
+    onConfirmClose: async (tab) => {
+      const docName = tab.title || 'Untitled';
+      return await showCloseDialog(
+        'Save changes before closing?',
+        `Do you want to save the changes made to "${docName}"? Your changes will be lost if you don't save.`,
+        docName
+      );
+    },
+    onSaveTab: async (tab) => {
+      return await saveTabSession(tab.session, tab.title);
+    },
+  });
   toolbar     = new Toolbar(session);
   inspector   = new Inspector(session);
   canvasView  = new CanvasView(session);
@@ -139,13 +156,15 @@ document.addEventListener('DOMContentLoaded', () => {
   bindStatusBar(session);
   updateStatusBar();
 
-  // Hide startup loader once canvas is ready & show New Canvas dialog on startup
+  // Hide startup loader once canvas is ready & show New Canvas dialog on startup if enabled
   requestAnimationFrame(() => {
     document.getElementById('startup-loader')?.classList.add('ready');
     window.api?.setAppReady?.();
-    showNewCanvasPanel(session, () => {
-      canvasView?.zoomToFit();
-    });
+    if (getShowOnStartup()) {
+      showNewCanvasPanel(session, () => {
+        canvasView?.zoomToFit();
+      });
+    }
   });
 });
 
@@ -179,7 +198,24 @@ function bindKeyboard() {
       return;
     }
 
-    // Crop / Escape
+    // Number keys 1-0 for opacity (1 = 10%, ..., 9 = 90%, 0 = 100%)
+    if (!ctrl && !shift && !e.altKey && ((key >= '1' && key <= '9') || key === '0')) {
+      const op = key === '0' ? 1.0 : parseInt(key, 10) / 10;
+      if (session.tool === Tool.GRADIENT) {
+        e.preventDefault();
+        session.setGradientOpacity(op);
+        return;
+      }
+      if (session.tool === Tool.BRUSH || session.tool === Tool.ERASER || session.tool === Tool.CLONE) {
+        e.preventDefault();
+        session.brushOpacity = op;
+        session._emit('tool-change', { tool: session.tool });
+        canvasView._markDirty();
+        return;
+      }
+    }
+
+    // Crop / Gradient / Escape
     if (key === 'enter') {
       if (session.tool === Tool.CROP) {
         e.preventDefault();
@@ -187,6 +223,11 @@ function bindKeyboard() {
         const fallback = layer && !layer.isGroup ? { x: layer.transform.x, y: layer.transform.y, w: layer.transform.w, h: layer.transform.h } : (session.document ? { x: 0, y: 0, w: session.document.width, h: session.document.height } : null);
         const cr = session.cropRect || fallback;
         if (cr) session.cropActiveLayer(cr);
+        return;
+      }
+      if (session.tool === Tool.GRADIENT) {
+        e.preventDefault();
+        session.fillGradient();
         return;
       }
     }
@@ -198,6 +239,14 @@ function bindKeyboard() {
         session._emit('canvas-dirty');
         return;
       }
+      if (session.tool === Tool.GRADIENT && canvasView._liveGrad) {
+        e.preventDefault();
+        canvasView._liveGrad = null;
+        canvasView._drag = null;
+        canvasView._endDrag();
+        canvasView._markDirty();
+        return;
+      }
       if (session.selectionRect) {
         e.preventDefault();
         session.deselect();
@@ -206,15 +255,24 @@ function bindKeyboard() {
     }
 
     // Tool shortcuts (Photoshop-style single keys)
-    if (!ctrl && !shift) {
+    if (!ctrl && !shift && !e.altKey) {
       const toolKeys = {
-        v: Tool.MOVE, b: Tool.BRUSH, e: Tool.ERASER, k: Tool.BUCKET, j: Tool.HEAL, s: Tool.CLONE,
+        v: Tool.CURSOR, m: Tool.MOVE, q: Tool.MARQUEE,
+        b: Tool.BRUSH, e: Tool.ERASER, k: Tool.BUCKET, j: Tool.HEAL, s: Tool.CLONE,
         r: Tool.BLUR, h: Tool.HAND, z: Tool.ZOOM, c: Tool.CROP, g: Tool.GRADIENT,
-        u: Tool.SHAPE, i: Tool.EYEDROPPER, l: Tool.LASSO, m: Tool.MARQUEE, w: Tool.WAND,
+        u: Tool.SHAPE, i: Tool.EYEDROPPER, l: Tool.LASSO, w: Tool.WAND,
         t: Tool.TEXT
       };
       if (toolKeys[key]) { session.setTool(toolKeys[key]); e.preventDefault(); return; }
     }
+
+    // Clipart (Ctrl+Shift+I) & WordArt (Ctrl+Shift+W)
+    if (ctrl && shift && key === 'i') { e.preventDefault(); showClipartPanel(session); return; }
+    if (ctrl && shift && key === 'w') { e.preventDefault(); showWordArtPanel(session); return; }
+
+    // Flip shortcuts (Alt+Shift+H / Alt+Shift+V)
+    if (e.altKey && shift && key === 'h') { e.preventDefault(); session.flipLayerH(); return; }
+    if (e.altKey && shift && key === 'v') { e.preventDefault(); session.flipLayerV(); return; }
 
     // Undo / Redo
     if (ctrl && !shift && key === 'z') { e.preventDefault(); session.undo(); return; }
@@ -283,8 +341,8 @@ function bindKeyboard() {
         return;
       }
       if ((session.activeLayerID || session.selectedLayerIDs.size > 0) && session.document) {
-        session.deleteSelectedLayers();
         e.preventDefault();
+        promptDeleteLayers(session);
       }
       return;
     }
@@ -299,7 +357,7 @@ function bindKeyboard() {
     if (ctrl && shift && key === 'n') { e.preventDefault(); session.addBlankLayer(); }
 
     // Close tab
-    if (ctrl && key === 'w') { e.preventDefault(); if (tabs.activeID) tabs.closeTab(tabs.activeID); }
+    if (ctrl && key === 'w') { e.preventDefault(); if (tabs.activeID) await tabs.closeTab(tabs.activeID); }
 
     // Export JPEG
     if (ctrl && shift && e.altKey && key === 's') { e.preventDefault(); showJpegExportPanel(session, canvasView); return; }
@@ -342,7 +400,7 @@ function bindMenuEvents() {
   on('menu:export-jpeg',      () => showJpegExportPanel(session, canvasView));
   on('menu:export-png',       () => showPngExportPanel(session, canvasView));
   on('menu:print',            () => showPrintPreviewPanel(session, canvasView));
-  on('menu:close-tab',        () => { if (tabs.activeID) tabs.closeTab(tabs.activeID); });
+  on('menu:close-tab',        async () => { if (tabs.activeID) await tabs.closeTab(tabs.activeID); });
   on('menu:undo',             () => session.undo());
   on('menu:redo',             () => session.redo());
   on('menu:cut',              () => { if (session.activeLayerID) session.cutLayer(session.activeLayerID); });
@@ -353,7 +411,7 @@ function bindMenuEvents() {
   on('menu:duplicate-layer',  () => { if (session.activeLayerID) session.duplicateLayer(session.activeLayerID); });
   on('menu:merge-down',       () => { if (session.activeLayerID) session.mergeDown(session.activeLayerID); });
   on('menu:flatten',          () => session.flattenImage());
-  on('menu:delete-layer',     () => { if (session.activeLayerID || session.selectedLayerIDs.size > 0) session.deleteSelectedLayers(); });
+  on('menu:delete-layer',     () => { if (session.activeLayerID || session.selectedLayerIDs.size > 0) promptDeleteLayers(session); });
   on('menu:layer-up',         () => { if (session.activeLayerID) session.moveLayerUp(session.activeLayerID); });
   on('menu:layer-down',       () => { if (session.activeLayerID) session.moveLayerDown(session.activeLayerID); });
   on('menu:bring-forward',    () => { if (session.activeLayerID) session.bringForward(session.activeLayerID); });
@@ -384,71 +442,105 @@ function bindMenuEvents() {
   on('menu:flip-canvas-v',    () => session.flipCanvasV());
   on('menu:flip-layer-h',     () => session.flipLayerH());
   on('menu:flip-layer-v',     () => session.flipLayerV());
+  on('menu:mirror-layer-h',   () => session.mirrorLayerH());
+  on('menu:mirror-layer-v',   () => session.mirrorLayerV());
+  on('menu:insert-clipart',   () => showClipartPanel(session));
+  on('menu:insert-wordart',   () => showWordArtPanel(session));
   on('menu:deselect',         () => session.deselect());
 
   on('menu:remove-bg',        () => removeBackground(session));
 
   // Before-close: confirm unsaved changes with Save / Don't Save / Cancel
   on('app:before-close', async () => {
-    if (!session.isModified) {
-      window.api.confirmClose();
+    const dirtyTabs = tabs.tabs.filter(t => t.modified || t.session?.isModified || (t.session?.history?.canUndo ?? false));
+    if (dirtyTabs.length === 0) {
+      window.api?.confirmClose();
       return;
     }
-    const choice = await showCloseDialog();
-    if (choice === 'save') {
-      await doSave();
-      window.api.confirmClose();
-    } else if (choice === 'discard') {
-      window.api.confirmClose();
+    for (const tab of dirtyTabs) {
+      const choice = await showCloseDialog(
+        'Save changes before closing?',
+        `Do you want to save the changes made to "${tab.title}"? Your changes will be lost if you don't save.`,
+        tab.title
+      );
+      if (choice === 'save') {
+        const saved = await saveTabSession(tab.session, tab.title);
+        if (!saved) return; // user cancelled save dialog -> don't close app
+      } else if (choice === 'cancel') {
+        return; // cancel close
+      }
+      // 'discard' continues to next dirty tab
     }
-    // 'cancel' — do nothing, window stays open
+    window.api?.confirmClose();
   });
+}
 
-  /**
-   * Show a clean, compact modal close-confirmation dialog.
-   * Returns: 'save' | 'discard' | 'cancel'
-   */
-  function showCloseDialog(customTitle, customMessage) {
-    return new Promise((resolve) => {
-      const backdrop = document.createElement('div');
-      backdrop.style.cssText = 'position:fixed;inset:0;z-index:99000;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);animation:fadeIn .15s ease';
+/**
+ * Show a clean, compact modal close-confirmation dialog.
+ * Returns: 'save' | 'discard' | 'cancel'
+ */
+function showCloseDialog(customTitle, customMessage, docNameOverride) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-overlay';
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:99000;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);animation:fadeIn .15s ease';
 
-      const dlg = document.createElement('div');
-      dlg.style.cssText = 'background:#1a1b22;border:1px solid rgba(255,255,255,0.12);border-radius:10px;box-shadow:0 18px 48px rgba(0,0,0,0.7);width:380px;font-family:var(--font-sans);color:#e0e0e0;padding:20px;display:flex;flex-direction:column;gap:14px;animation:te-dialog-in .15s cubic-bezier(.22,1,.36,1)';
+    const dlg = document.createElement('div');
+    dlg.className = 'modal';
+    dlg.style.cssText = 'background:#1a1b22;border:1px solid rgba(255,255,255,0.12);border-radius:10px;box-shadow:0 18px 48px rgba(0,0,0,0.7);width:380px;font-family:var(--font-sans);color:#e0e0e0;padding:20px;display:flex;flex-direction:column;gap:14px;animation:te-dialog-in .15s cubic-bezier(.22,1,.36,1)';
 
-      const docName = session.projectURL
-        ? session.projectURL.split(/[/\\]/).pop()
-        : 'Untitled';
+    const docName = docNameOverride || (session?.projectURL
+      ? session.projectURL.split(/[/\\]/).pop()
+      : 'Untitled');
 
-      const titleText = customTitle || 'Save changes before closing?';
-      const msgText = customMessage || `Do you want to save the changes made to "${docName}"? Your changes will be lost if you don't save.`;
+    const titleText = customTitle || 'Save changes before closing?';
+    const msgText = customMessage || `Do you want to save the changes made to "${docName}"? Your changes will be lost if you don't save.`;
 
-      dlg.innerHTML = `
-        <div style="display:flex;flex-direction:column;gap:6px">
-          <div style="font-size:14px;font-weight:600;color:#ffffff">${titleText}</div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.6);line-height:1.45">${msgText}</div>
-        </div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px">
-          <button id="cls-discard" style="padding:7px 13px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:6px;color:#fca5a5;font-size:12px;font-weight:500;cursor:pointer;transition:all .12s">Don't Save</button>
-          <button id="cls-cancel"  style="padding:7px 13px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#d1d5db;font-size:12px;font-weight:500;cursor:pointer;transition:all .12s">Cancel</button>
-          <button id="cls-save"    style="padding:7px 18px;background:#3b82f6;border:none;border-radius:6px;color:#ffffff;font-size:12px;font-weight:600;cursor:pointer;transition:all .12s">Save</button>
-        </div>
-      `;
+    dlg.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:14px;font-weight:600;color:#ffffff">${titleText}</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.6);line-height:1.45">${msgText}</div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px">
+        <button id="cls-discard" style="padding:7px 13px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:6px;color:#fca5a5;font-size:12px;font-weight:500;cursor:pointer;transition:all .12s">Don't Save</button>
+        <button id="cls-cancel"  style="padding:7px 13px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#d1d5db;font-size:12px;font-weight:500;cursor:pointer;transition:all .12s">Cancel</button>
+        <button id="cls-save"    style="padding:7px 18px;background:#3b82f6;border:none;border-radius:6px;color:#ffffff;font-size:12px;font-weight:600;cursor:pointer;transition:all .12s">Save</button>
+      </div>
+    `;
 
-      backdrop.appendChild(dlg);
-      document.body.appendChild(backdrop);
+    backdrop.appendChild(dlg);
+    document.body.appendChild(backdrop);
 
-      const pick = (val) => { backdrop.remove(); resolve(val); };
-      dlg.querySelector('#cls-save').onclick    = () => pick('save');
-      dlg.querySelector('#cls-discard').onclick = () => pick('discard');
-      dlg.querySelector('#cls-cancel').onclick  = () => pick('cancel');
-      backdrop.addEventListener('click', e => { if (e.target === backdrop) pick('cancel'); });
-      const onKey = e => {
-        if (e.key === 'Escape') { document.removeEventListener('keydown', onKey); pick('cancel'); }
-        if (e.key === 'Enter')  { document.removeEventListener('keydown', onKey); pick('save'); }
-      };
-      document.addEventListener('keydown', onKey);
-    });
+    const onKey = (e) => {
+      if (e.key === 'Escape') pick('cancel');
+      if (e.key === 'Enter')  pick('save');
+    };
+
+    const pick = (val) => {
+      document.removeEventListener('keydown', onKey);
+      backdrop.remove();
+      resolve(val);
+    };
+
+    dlg.querySelector('#cls-save').onclick    = () => pick('save');
+    dlg.querySelector('#cls-discard').onclick = () => pick('discard');
+    dlg.querySelector('#cls-cancel').onclick  = () => pick('cancel');
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) pick('cancel'); });
+    document.addEventListener('keydown', onKey);
+  });
+}
+
+async function saveTabSession(targetSession, tabTitle) {
+  if (!targetSession?.document) return false;
+  if (targetSession.projectURL) {
+    await saveProject(targetSession, targetSession.projectURL);
+    return true;
+  } else {
+    const name = tabTitle || (targetSession.projectURL ? targetSession.projectURL.split(/[/\\]/).pop().replace(/\.compositor$/, '') : 'Untitled');
+    const path = await window.api?.saveProjectDialog(name);
+    if (!path) return false;
+    await saveProject(targetSession, path);
+    return true;
   }
 }
 
@@ -459,11 +551,17 @@ function showNewCanvas() {
     canvasView.zoomToFit();
   }, {
     onBeforeCreate: async () => {
-      if (!session.isModified) return true;
-      const choice = await showCloseDialog('Save changes before creating a new canvas?');
+      const isDirty = Boolean(session.isModified || tabs.activeTab?.modified || session.history?.canUndo);
+      if (!isDirty) return true;
+      const docName = tabs.activeTab?.title || 'Untitled';
+      const choice = await showCloseDialog(
+        'Save changes before creating a new canvas?',
+        `Do you want to save the changes made to "${docName}"? Your changes will be lost if you don't save.`,
+        docName
+      );
       if (choice === 'save') {
-        await doSave();
-        return true;
+        const saved = await saveTabSession(session, tabs.activeTab?.title);
+        return Boolean(saved); // Abort if user cancelled the save dialog
       } else if (choice === 'discard') {
         return true;
       }
@@ -489,11 +587,7 @@ async function doOpen() {
 
 async function doSave() {
   if (!session.document) return;
-  if (session.projectURL) {
-    await saveProject(session, session.projectURL);
-  } else {
-    await doSaveAs();
-  }
+  await saveTabSession(session, tabs.activeTab?.title);
 }
 
 async function doSaveAs() {

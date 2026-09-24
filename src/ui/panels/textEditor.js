@@ -5,25 +5,28 @@
 let _modal = null;
 let _state = null;
 
-export function openTextEditor(session, layer, docX, docY, existing, onConfirm, onCancel) {
+export function openTextEditor(session, layer, docX, docY, existing, onConfirm, onCancel, opts = {}) {
   if (_modal) _destroyModal();
   const s = session;
   _state = {
     session, layer, docX, docY,
     text:          existing?.text          ?? '',
-    fontFamily:    existing?.fontFamily    ?? s.fontFamily,
-    fontSize:      existing?.fontSize      ?? s.fontSize,
-    fontWeight:    existing?.fontWeight    ?? s.fontWeight,
-    fontStyle:     existing?.fontStyle     ?? s.fontStyle,
-    textAlign:     existing?.textAlign     ?? s.textAlign,
-    lineHeight:    existing?.lineHeight    ?? s.lineHeight,
-    letterSpacing: existing?.letterSpacing ?? s.letterSpacing,
-    color:         existing?.color         ?? s.fgColor,
+    fontFamily:    existing?.fontFamily    ?? s.fontFamily ?? "'Plus Jakarta Sans', sans-serif",
+    fontSize:      existing?.fontSize      ?? s.fontSize   ?? 48,
+    fontWeight:    existing?.fontWeight    ?? s.fontWeight ?? 'normal',
+    fontStyle:     existing?.fontStyle     ?? s.fontStyle  ?? 'normal',
+    textAlign:     existing?.textAlign     ?? s.textAlign  ?? 'left',
+    lineHeight:    existing?.lineHeight    ?? s.lineHeight ?? 1.2,
+    letterSpacing: existing?.letterSpacing ?? s.letterSpacing ?? 0,
+    color:         existing?.color         ?? s.fgColor    ?? '#000000',
+    initialBoxW:   opts?.initialBoxW       ?? existing?.initialBoxW ?? existing?.boxW ?? layer?.transform?.w ?? 0,
+    initialBoxH:   opts?.initialBoxH       ?? existing?.initialBoxH ?? existing?.boxH ?? layer?.transform?.h ?? 0,
     onConfirm, onCancel,
   };
   _modal = _buildModal();
   document.body.appendChild(_modal);
   _renderLive();
+  s._emit('text-editor-open', { layer });
   requestAnimationFrame(() => {
     const ta = _modal.querySelector('#te-textarea');
     if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
@@ -35,6 +38,7 @@ export function closeTextEditor() {
 }
 
 export function isTextEditorOpen() { return !!_modal; }
+export function getActiveTextEditingLayer() { return _state?.layer ?? null; }
 
 export function renderTextToLayer(layer, docX, docY, state) {
   if (!layer) return;
@@ -43,8 +47,8 @@ export function renderTextToLayer(layer, docX, docY, state) {
 
   const fontStyle     = state.fontStyle     || 'normal';
   const fontWeight    = state.fontWeight    || 'normal';
-  const fontSize      = Math.max(4, state.fontSize || 24);
-  const fontFamily    = state.fontFamily    || 'Inter, sans-serif';
+  const fontSize      = Math.max(4, state.fontSize || 48);
+  const fontFamily    = state.fontFamily    || "'Plus Jakarta Sans', sans-serif";
   const lineHeight    = state.lineHeight    || 1.2;
   const letterSpacing = state.letterSpacing || 0;
   const textAlign     = state.textAlign     || 'left';
@@ -83,32 +87,30 @@ export function renderTextToLayer(layer, docX, docY, state) {
     }
   }
 
-  // If text is completely empty or blank, provide a minimal visible placeholder box
-  const hasContent = text.trim().length > 0;
-  const effectiveW = hasContent ? Math.max(12, maxW) : Math.max(12, fontSize * 1.5);
-  const effectiveH = hasContent ? Math.max(fontSize, (lines.length - 1) * lineH + fontSize * 1.15) : Math.max(fontSize, lineH);
-
   // Padding to prevent glyph cutoffs (for italics, ascenders, descenders)
   const padX = Math.max(6, Math.round(fontSize * 0.25));
   const padY = Math.max(4, Math.round(fontSize * 0.2));
 
-  const targetW = Math.max(8, Math.ceil(effectiveW + padX * 2));
-  const targetH = Math.max(8, Math.ceil(effectiveH + padY * 2));
+  const hasContent = text.trim().length > 0;
+  const effectiveW = hasContent ? Math.max(12, maxW) : Math.max(12, fontSize * 1.5);
+  const effectiveH = hasContent ? Math.max(fontSize, (lines.length - 1) * lineH + fontSize * 1.15) : Math.max(fontSize, lineH);
 
-  // Determine top-left layer origin in document space based on alignment anchor
-  let targetX = docX;
-  if (textAlign === 'center') {
-    targetX = docX - effectiveW / 2 - padX;
-  } else if (textAlign === 'right') {
-    targetX = docX - effectiveW - padX;
-  } else {
-    targetX = docX - padX;
-  }
-  const targetY = docY - padY;
+  const minBoxW = state.initialBoxW ? Math.max(16, state.initialBoxW) : 16;
+  const minBoxH = state.initialBoxH ? Math.max(16, state.initialBoxH) : 16;
 
-  // Dynamically expand / contract layer transform and backing canvas to match text
-  layer.transform.x = Math.round(targetX);
-  layer.transform.y = Math.round(targetY);
+  const contentW = Math.ceil(effectiveW + padX * 2);
+  const contentH = Math.ceil(effectiveH + padY * 2);
+
+  // Layer width & height: accommodate user-defined initial box or tightly follow text content
+  const targetW = Math.max(8, Math.max(minBoxW, contentW));
+  const targetH = Math.max(8, Math.max(minBoxH, contentH));
+
+  // Fixed top-left origin: text alignment does NOT shift layer position across canvas
+  const targetX = Math.round(docX);
+  const targetY = Math.round(docY);
+
+  layer.transform.x = targetX;
+  layer.transform.y = targetY;
   layer.transform.w = targetW;
   layer.transform.h = targetH;
   layer.pixelW = targetW;
@@ -138,9 +140,13 @@ export function renderTextToLayer(layer, docX, docY, state) {
   ctx.fillStyle = color;
   ctx.textBaseline = 'top';
 
+  // Align text relative to the bounding box [padX, targetW - padX]
   let alignX = padX;
-  if (textAlign === 'center') alignX = padX + effectiveW / 2;
-  else if (textAlign === 'right') alignX = padX + effectiveW;
+  if (textAlign === 'center') {
+    alignX = targetW / 2;
+  } else if (textAlign === 'right') {
+    alignX = targetW - padX;
+  }
   ctx.textAlign = textAlign;
 
   const localY = padY;
@@ -150,9 +156,9 @@ export function renderTextToLayer(layer, docX, docY, state) {
       ctx.textAlign = 'left';
       let cx = padX;
       if (textAlign === 'center') {
-        cx = padX + (effectiveW - lineWidths[i]) / 2;
+        cx = (targetW - lineWidths[i]) / 2;
       } else if (textAlign === 'right') {
-        cx = padX + (effectiveW - lineWidths[i]);
+        cx = targetW - padX - lineWidths[i];
       }
       for (const char of lines[i]) {
         ctx.fillText(char, cx, ly);
@@ -178,20 +184,31 @@ function _renderLive() {
 }
 
 function _destroyModal() {
+  const s = _state?.session;
   if (_modal) { _modal.remove(); _modal = null; }
   _state = null;
+  if (s) {
+    s._emit('text-editor-close');
+    s._emit('canvas-dirty');
+  }
 }
 
 function _fontOptions(current) {
   const fonts = [
-    ['Inter, sans-serif','Inter'],['Arial, sans-serif','Arial'],['Georgia, serif','Georgia'],
-    ["'Courier New', monospace",'Courier New'],["'Times New Roman', serif",'Times New Roman'],
-    ['Verdana, sans-serif','Verdana'],["'Segoe UI', sans-serif",'Segoe UI'],
-    ['Consolas, monospace','Consolas'],['Impact, sans-serif','Impact'],
-    ['Trebuchet MS, sans-serif','Trebuchet MS'],
+    ["'Plus Jakarta Sans', sans-serif", 'Jakarta'],
+    ['Inter, sans-serif', 'Inter'],
+    ['Arial, sans-serif', 'Arial'],
+    ['Georgia, serif', 'Georgia'],
+    ["'Courier New', monospace", 'Courier New'],
+    ["'Times New Roman', serif", 'Times New Roman'],
+    ['Verdana, sans-serif', 'Verdana'],
+    ["'Segoe UI', sans-serif", 'Segoe UI'],
+    ['Consolas, monospace', 'Consolas'],
+    ['Impact, sans-serif', 'Impact'],
+    ["'Trebuchet MS', sans-serif", 'Trebuchet MS'],
   ];
-  return fonts.map(([val,label]) =>
-    `<option value="${val}"${val===current?' selected':''}>${label}</option>`
+  return fonts.map(([val, label]) =>
+    `<option value="${val}"${(val === current || (current && (current.includes('Jakarta') || current.includes('Plus Jakarta')) && val.includes('Jakarta')))?' selected':''}>${label}</option>`
   ).join('');
 }
 
@@ -355,9 +372,13 @@ function _confirm() {
     fontWeight: _state.fontWeight, fontStyle: _state.fontStyle,
     textAlign: _state.textAlign, lineHeight: _state.lineHeight,
     letterSpacing: _state.letterSpacing, color: _state.color,
-    docX, docY,
-    localX: (docX - layer.transform.x) * (layer.pixelW / Math.max(1, layer.transform.w)),
-    localY: (docY - layer.transform.y) * (layer.pixelH / Math.max(1, layer.transform.h)),
+    docX: layer.transform.x, docY: layer.transform.y,
+    boxX: layer.transform.x, boxY: layer.transform.y,
+    boxW: layer.transform.w, boxH: layer.transform.h,
+    initialBoxW: _state.initialBoxW || layer.transform.w,
+    initialBoxH: _state.initialBoxH || layer.transform.h,
+    localX: 0,
+    localY: 0,
   };
   layer.markChanged();
   if (_modal?._onGlobalKey) document.removeEventListener('keydown', _modal._onGlobalKey);

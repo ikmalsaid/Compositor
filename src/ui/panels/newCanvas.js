@@ -8,10 +8,27 @@ import { iconPortrait, iconLandscape, iconSearch, iconClose, iconCheck } from '.
 
 const STORAGE_DEFAULT_KEY = 'compositor:default-canvas-settings';
 const STORAGE_RECENTS_KEY = 'compositor:recent-canvas-sizes';
+const STORAGE_STARTUP_KEY = 'compositor:show-on-startup';
+
+export function getShowOnStartup() {
+  try {
+    return localStorage.getItem(STORAGE_STARTUP_KEY) !== 'false';
+  } catch (e) {
+    return true;
+  }
+}
+
+export function setShowOnStartup(show) {
+  try {
+    localStorage.setItem(STORAGE_STARTUP_KEY, show ? 'true' : 'false');
+  } catch (e) {
+    console.warn('Could not save startup preference:', e);
+  }
+}
 
 export const PRESET_CATALOGUE = [
   // ─── Popular ───
-  { id: 'pop-default-ps', category: 'popular', label: 'Default Compositor Size', desc: '16:9 Standard', w: 1920, h: 1080, ppi: 72, ratio: '16:9', unit: 'px' },
+  { id: 'pop-default-ps', category: 'popular', label: 'Default Size', desc: '16:9 Standard', w: 1920, h: 1080, ppi: 72, ratio: '16:9', unit: 'px' },
   { id: 'pop-ig-post', category: 'popular', label: 'Instagram Post', desc: '1:1 Square', w: 1080, h: 1080, ppi: 72, ratio: '1:1', unit: 'px' },
   { id: 'pop-a4-doc', category: 'popular', label: 'A4 Document', desc: '210 × 297 mm', w: 2480, h: 3508, ppi: 300, ratio: '1:1.41', unit: 'mm' },
   { id: 'pop-us-letter', category: 'popular', label: 'US Letter', desc: '8.5 × 11 in', w: 2550, h: 3300, ppi: 300, ratio: '8.5:11', unit: 'in' },
@@ -70,7 +87,7 @@ export function getDefaultCanvasSettings() {
         return {
           presetId: parsed.presetId ?? 'pop-default-ps',
           docName: parsed.docName ?? 'Untitled-1',
-          label: parsed.label ?? 'Default Compositor Size',
+          label: parsed.label ?? 'Default Size',
           unit: parsed.unit ?? 'px',
           width: parsed.width,
           height: parsed.height,
@@ -86,7 +103,7 @@ export function getDefaultCanvasSettings() {
   return {
     presetId: 'pop-default-ps',
     docName: 'Untitled-1',
-    label: 'Default Compositor Size',
+    label: 'Default Size',
     unit: 'px',
     width: 1920,
     height: 1080,
@@ -193,15 +210,14 @@ export function showNewCanvasPanel(session, onCreated, opts = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal new-canvas-modal" style="width:780px;max-width:95vw;height:520px;max-height:90vh;display:flex;flex-direction:column;border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.08);background:#1a1a1e;color:#e2e2e8;overflow:hidden;font-family:var(--font-sans);font-size:12px;user-select:none;animation:modalIn 0.16s cubic-bezier(0.2, 0.9, 0.3, 1)">
+    <div class="modal new-canvas-modal" style="width:880px;max-width:95vw;height:580px;max-height:90vh;display:flex;flex-direction:column;border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.08);background:#1a1a1e;color:#e2e2e8;overflow:hidden;font-family:var(--font-sans);font-size:12px;user-select:none;animation:modalIn 0.16s cubic-bezier(0.2, 0.9, 0.3, 1)">
 
       <!-- Top Header & Tabs -->
       <div style="background:#141417;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;flex-shrink:0">
         <!-- Title Bar -->
         <div style="height:40px;padding:0 18px;display:flex;align-items:center;justify-content:space-between">
-          <div style="font-size:13px;font-weight:600;color:#ffffff;display:flex;align-items:center;gap:8px">
-            <span style="color:var(--accent,#4f8ef7);font-size:15px">✦</span>
-            <span>New Document</span>
+          <div style="font-size:13px;font-weight:600;color:#ffffff;display:flex;align-items:center">
+            <span>New Canvas</span>
           </div>
           <button id="nc-close-btn" style="background:transparent;border:none;color:#8c8c94;cursor:pointer;padding:6px;display:flex;align-items:center;justify-content:center;border-radius:4px;transition:all .12s" title="Close (Esc)">${iconClose(14)}</button>
         </div>
@@ -218,7 +234,7 @@ export function showNewCanvasPanel(session, onCreated, opts = {}) {
           </div>
 
           <!-- Filter Search -->
-          <div style="position:relative;width:160px;margin-right:4px">
+          <div style="position:relative;width:170px;margin-right:4px">
             <input type="text" id="nc-filter-input" placeholder="Search presets…" style="width:100%;height:26px;padding:2px 24px 2px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:#fff;font-size:11.5px;box-sizing:border-box;outline:none" />
             <span style="position:absolute;right:8px;top:6px;display:flex;align-items:center;color:#777;pointer-events:none">${iconSearch(12)}</span>
           </div>
@@ -229,13 +245,13 @@ export function showNewCanvasPanel(session, onCreated, opts = {}) {
       <div style="flex:1;display:flex;min-height:0;background:#1a1a1e">
 
         <!-- Left Presets Grid -->
-        <div class="nc-left-pane" style="flex:1;overflow-y:auto;padding:14px 16px;border-right:1px solid rgba(255,255,255,0.07);display:flex;flex-direction:column">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-            <div style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.6);text-transform:uppercase;letter-spacing:0.5px" id="nc-grid-title">Popular Presets</div>
+        <div class="nc-left-pane" style="flex:1;overflow-y:auto;padding:16px 18px;border-right:1px solid rgba(255,255,255,0.07);display:flex;flex-direction:column">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div style="font-size:11.5px;font-weight:600;color:rgba(255,255,255,0.6);text-transform:uppercase;letter-spacing:0.5px" id="nc-grid-title">Popular Presets</div>
             <div style="font-size:11px;color:rgba(255,255,255,0.4)" id="nc-grid-count"></div>
           </div>
 
-          <div id="nc-presets-grid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(140px, 1fr));gap:10px">
+          <div id="nc-presets-grid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(160px, 1fr));gap:12px">
             <!-- Injected dynamically -->
           </div>
 
@@ -246,9 +262,9 @@ export function showNewCanvasPanel(session, onCreated, opts = {}) {
         </div>
 
         <!-- Right Preset Details Inspector -->
-        <div class="nc-right-pane" style="width:260px;min-width:260px;background:#1e1e24;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+        <div class="nc-right-pane" style="width:270px;min-width:270px;background:#1e1e24;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:12px">
           <div>
-            <label style="font-size:10.5px;font-weight:600;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px">Document Name</label>
+            <label style="font-size:10.5px;color:rgba(255,255,255,0.5);display:block;margin-bottom:3px">Document Name</label>
             <input type="text" id="nc-doc-name" value="${selectedConfig.docName}" style="width:100%;height:28px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:4px;color:#fff;padding:0 8px;font-size:12px;font-weight:600;box-sizing:border-box;outline:none" placeholder="Untitled-1" />
           </div>
 
@@ -311,14 +327,20 @@ export function showNewCanvasPanel(session, onCreated, opts = {}) {
       </div>
 
       <!-- Bottom Footer -->
-      <div style="height:48px;background:#141417;border-top:1px solid rgba(255,255,255,0.08);padding:0 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
-        <button id="nc-save-default-btn" style="background:transparent;border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.7);padding:5px 12px;border-radius:5px;font-size:11px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all 0.12s ease" title="Save these settings as startup default">
-          <span id="nc-save-default-lbl">Set as Default</span>
-        </button>
+      <div style="height:50px;background:#141417;border-top:1px solid rgba(255,255,255,0.08);padding:0 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+        <div style="display:flex;align-items:center;gap:16px">
+          <button id="nc-save-default-btn" style="background:transparent;border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.7);padding:5px 12px;border-radius:5px;font-size:11px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all 0.12s ease" title="Save these settings as startup default">
+            <span id="nc-save-default-lbl">Set as Default</span>
+          </button>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:rgba(255,255,255,0.7);cursor:pointer;user-select:none">
+            <input type="checkbox" id="nc-show-startup-chk" ${getShowOnStartup() ? 'checked' : ''} style="cursor:pointer;accent-color:var(--accent,#4f8ef7)">
+            <span>Show on startup</span>
+          </label>
+        </div>
 
         <div style="display:flex;align-items:center;gap:8px">
-          <button id="nc-cancel-btn" style="height:30px;padding:0 14px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#ccc;border-radius:5px;font-size:11.5px;font-weight:500;cursor:pointer;transition:all 0.12s ease">Cancel</button>
-          <button id="nc-create-btn" style="height:30px;padding:0 20px;background:var(--accent,#4f8ef7);border:none;color:#fff;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(79,142,247,0.3);transition:all 0.12s ease">Create</button>
+          <button id="nc-cancel-btn" style="height:32px;padding:0 16px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#ccc;border-radius:5px;font-size:11.5px;font-weight:500;cursor:pointer;transition:all 0.12s ease">Cancel</button>
+          <button id="nc-create-btn" style="height:32px;padding:0 22px;background:var(--accent,#4f8ef7);border:none;color:#fff;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(79,142,247,0.3);transition:all 0.12s ease">Create</button>
         </div>
       </div>
 
@@ -554,23 +576,23 @@ export function showNewCanvasPanel(session, onCreated, opts = {}) {
       card.className = `nc-card ${isSelected ? 'active' : ''}`;
 
       const aspect = item.w / (item.h || 1);
-      let boxW = 44;
-      let boxH = 30;
+      let boxW = 56;
+      let boxH = 40;
       if (aspect >= 1) {
-        boxW = 44;
-        boxH = Math.max(14, Math.min(36, Math.round(44 / aspect)));
+        boxW = 56;
+        boxH = Math.max(18, Math.min(44, Math.round(56 / aspect)));
       } else {
-        boxH = 36;
-        boxW = Math.max(14, Math.min(44, Math.round(36 * aspect)));
+        boxH = 44;
+        boxW = Math.max(18, Math.min(56, Math.round(44 * aspect)));
       }
 
       card.innerHTML = `
         ${item.id.startsWith('rec-') ? `<button class="nc-del-btn" data-del-id="${item.id}" title="Remove from Recents">${iconClose(10)}</button>` : ''}
-        <div style="width:52px;height:40px;display:flex;align-items:center;justify-content:center">
+        <div style="width:72px;height:52px;display:flex;align-items:center;justify-content:center">
           <div class="nc-aspect-box" style="width:${boxW}px;height:${boxH}px">
-            <svg viewBox="0 0 20 16" width="16" height="12" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;opacity:0.65">
-              <circle cx="5" cy="4.5" r="1.6" fill="currentColor"/>
-              <path d="M1 14.5L6.5 7L10.5 12L13.5 8.5L19 14.5H1Z" fill="currentColor"/>
+            <svg viewBox="0 0 24 18" width="28" height="22" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;opacity:0.75">
+              <circle cx="6" cy="5.5" r="2.2" fill="currentColor"/>
+              <path d="M1.5 16.5L8 7.5L13 13.5L16.5 9.5L22.5 16.5H1.5Z" fill="currentColor"/>
             </svg>
           </div>
         </div>
@@ -746,6 +768,13 @@ export function showNewCanvasPanel(session, onCreated, opts = {}) {
       }, 2000);
     }
   });
+
+  const showStartupChk = overlay.querySelector('#nc-show-startup-chk');
+  if (showStartupChk) {
+    showStartupChk.addEventListener('change', () => {
+      setShowOnStartup(showStartupChk.checked);
+    });
+  }
 
   createBtn.addEventListener('click', () => executeCreate());
   cancelBtn.addEventListener('click', () => close());

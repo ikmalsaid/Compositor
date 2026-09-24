@@ -37,8 +37,7 @@ export const iconLayer       = (size = 14) => createFaIcon('fa-layer-group', { s
 export const iconChevronRight= (size = 10) => createFaIcon('fa-chevron-right', { size });
 export const iconChevronDown = (size = 10) => createFaIcon('fa-chevron-down', { size });
 
-// ─── Toolbar & Tool Badges Icons ─────────────────────────────────────────────
-
+export const iconCursor     = (size = 16) => createFaIcon('fa-arrow-pointer', { size });
 export const iconMove        = (size = 16) => createFaIcon('fa-up-down-left-right', { size });
 export const iconMarquee     = (size = 16) => createFaIcon('fa-vector-square', { size });
 export const iconLasso       = (size = 16) => createFaIcon('fa-draw-polygon', { size });
@@ -54,6 +53,12 @@ export const iconGradient    = (size = 16) => createFaIcon('fa-swatchbook', { si
 export const iconBucket      = (size = 16) => createFaIcon('fa-fill-drip', { size });
 export const iconShape       = (size = 16) => createFaIcon('fa-shapes', { size });
 export const iconText        = (size = 16) => createFaIcon('fa-font', { size });
+export const iconClipart     = (size = 16) => createFaIcon('fa-icons', { size });
+export const iconWordArt     = (size = 16) => createFaIcon('fa-signature', { size });
+export const iconFlipH       = (size = 14) => createFaIcon('fa-arrows-left-right', { size });
+export const iconFlipV       = (size = 14) => createFaIcon('fa-arrows-up-down', { size });
+export const iconMirrorH     = (size = 14) => createFaIcon('fa-left-right', { size });
+export const iconMirrorV     = (size = 14) => createFaIcon('fa-up-down', { size });
 export const iconHand        = (size = 16) => createFaIcon('fa-hand', { size });
 export const iconZoom        = (size = 16) => createFaIcon('fa-magnifying-glass', { size });
 export const iconSwap        = (size = 12) => createFaIcon('fa-right-left', { size });

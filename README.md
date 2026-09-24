@@ -56,8 +56,9 @@ Because it’s open source, you can clone the project and add, remove, or modify
 - Automatic downscaling of large imported images to fit canvas while preserving original resolution
 - Image Size dialog with aspect ratio constraint and resampling methods
 - Canvas Size dialog with 9-point directional anchor grid and background extension fills
-- Interactive Print Preview with paper presets, orientation, margin guides, direct printing, and PDF export
+- Interactive Print Preview with paper presets (A4, Letter, Legal, Photo 4×6, 5×7, 8×10, A3, Tabloid), orientation, margin guides, direct printing, and PDF export
 - Full native `.compositor` project format compatibility (version 7 schema)
+- Clean modern UI styled with **Plus Jakarta Sans** typography and **FontAwesome 6** vector icons
 - Photoshop-style keyboard shortcuts throughout
 
 ## Requirements
@@ -70,8 +71,8 @@ Because it’s open source, you can clone the project and add, remove, or modify
 Clone the repository and start the development application:
 
 ```bash
-git clone https://github.com/ikmalsaid/Compositor.git
-cd Compositor
+git clone https://github.com/ikmalsaid/compositor.git
+cd compositor
 npm install
 npm start
 ```
@@ -92,8 +93,8 @@ Build an NSIS installer and standalone executable for Windows:
 npm run build
 ```
 
-The output installer will be generated in `dist` folder.
+The output installer will be generated in `compositor-win/dist/`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](../LICENSE).

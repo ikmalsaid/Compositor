@@ -3,11 +3,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Tool } from '../store/session.js';
+import { stopsToCss, normalizeStops, sampleGradient } from '../assets/gradientData.js';
 import {
-  iconMove, iconMarquee, iconLasso, iconWand, iconCrop,
+  iconCursor, iconMove, iconMarquee, iconLasso, iconWand, iconCrop,
   iconEyedropper, iconBrush, iconEraser, iconClone, iconHeal,
   iconBlur, iconGradient, iconBucket, iconShape, iconText,
-  iconHand, iconZoom, iconCheck, iconClose, iconTrash, iconFill
+  iconHand, iconZoom, iconCheck, iconClose, iconTrash, iconFill,
+  iconFlipH, iconFlipV, iconMirrorH, iconMirrorV
 } from './icons.js';
 
 export class Inspector {
@@ -59,6 +61,9 @@ export class Inspector {
     this.el.innerHTML = '';
 
     switch (tool) {
+      case Tool.CURSOR:
+        this._renderCursorInspector(doc);
+        break;
       case Tool.MOVE:
         this._renderMoveInspector(doc);
         break;
@@ -117,6 +122,47 @@ export class Inspector {
     return `<div class="inspector-badge" style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:4px;font-size:11px;font-weight:600;color:var(--text);letter-spacing:0.3px;">${iconSvg ? `<span style="display:inline-flex;align-items:center;opacity:0.85">${iconSvg}</span>` : ''}<span>${label}</span></div>`;
   }
 
+  _renderCursorInspector(doc) {
+    const layer = this.session.activeLayer;
+    const selectedCount = this.session.selectedLayerIDs.size;
+    if (!layer || !doc) {
+      this.el.innerHTML = `
+        <div class="inspector-group">
+          ${this._renderBadge('Cursor / Select', iconCursor(14))}
+          <span class="inspector-placeholder" style="margin-left:8px">Click or marquee drag on canvas to select layers</span>
+        </div>
+      `;
+      return;
+    }
+
+    const t = layer.transform;
+    this.el.innerHTML = `
+      <div class="inspector-group">
+        ${this._renderBadge('Cursor', iconCursor(14))}
+      </div>
+      <div class="inspector-group" style="margin-left:6px">
+        <span class="inspector-label">${selectedCount > 1 ? `${selectedCount} layers selected` : `Layer: <strong>${layer.name}</strong>`}</span>
+        <span class="inspector-val mono" style="margin-left:8px">${Math.round(t.w)} × ${Math.round(t.h)} px</span>
+      </div>
+      <div class="inspector-group" style="margin-left:12px;gap:4px">
+        <button class="btn btn-secondary btn-sm ${t.flipX ? 'active' : ''}" id="btn-flip-h" title="Flip Horizontal (Alt+Shift+H)" style="padding:2px 7px;display:flex;align-items:center;gap:4px">
+          ${iconFlipH(12)} <span>Flip H</span>
+        </button>
+        <button class="btn btn-secondary btn-sm ${t.flipY ? 'active' : ''}" id="btn-flip-v" title="Flip Vertical (Alt+Shift+V)" style="padding:2px 7px;display:flex;align-items:center;gap:4px">
+          ${iconFlipV(12)} <span>Flip V</span>
+        </button>
+        <button class="btn btn-secondary btn-sm" id="btn-mirror-h" title="Mirror Layer Horizontal (Duplicate & Flip)" style="padding:2px 7px;display:flex;align-items:center;gap:4px">
+          ${iconMirrorH(12)} <span>Mirror H</span>
+        </button>
+      </div>
+      <div class="inspector-group" style="margin-left:auto;gap:6px">
+        <button class="btn btn-secondary btn-sm" id="btn-center-layer" title="Center selected layer on canvas">⌖ Center</button>
+      </div>
+    `;
+
+    this._bindFlipMirrorEvents(layer);
+  }
+
   _renderMoveInspector(doc) {
     const layer = this.session.activeLayer;
     if (!layer || !doc) {
@@ -153,12 +199,23 @@ export class Inspector {
         ${t.rotation ? `<span class="inspector-label" style="margin-left:8px">°</span>
         <span class="inspector-val mono">${t.rotation.toFixed(1)}°</span>` : ''}
       </div>
+      <div class="inspector-group" style="margin-left:8px;gap:4px">
+        <button class="btn btn-secondary btn-sm ${t.flipX ? 'active' : ''}" id="btn-flip-h" title="Flip Horizontal (Alt+Shift+H)" style="padding:2px 7px;display:flex;align-items:center;gap:4px">
+          ${iconFlipH(12)} <span>Flip H</span>
+        </button>
+        <button class="btn btn-secondary btn-sm ${t.flipY ? 'active' : ''}" id="btn-flip-v" title="Flip Vertical (Alt+Shift+V)" style="padding:2px 7px;display:flex;align-items:center;gap:4px">
+          ${iconFlipV(12)} <span>Flip V</span>
+        </button>
+        <button class="btn btn-secondary btn-sm" id="btn-mirror-h" title="Mirror Layer Horizontal (Duplicate & Flip)" style="padding:2px 7px;display:flex;align-items:center;gap:4px">
+          ${iconMirrorH(12)} <span>Mirror</span>
+        </button>
+      </div>
       ${!layer.isGroup ? `
       <div class="inspector-group" style="margin-left:8px">
         <span class="inspector-label">Shape Frame</span>
-        <select class="form-input" id="layer-shape-frame" style="width:155px;padding:2px 6px">
-          <option value="none" ${layer.shapeMask === 'none' || !layer.shapeMask ? 'selected' : ''}>None (Standard)</option>
-          <option value="circle" ${layer.shapeMask === 'circle' || layer.shapeMask === 'ellipse' ? 'selected' : ''}>Circle / Ellipse</option>
+        <select class="form-input" id="layer-shape-frame" style="width:130px;padding:2px 6px">
+          <option value="none" ${layer.shapeMask === 'none' || !layer.shapeMask ? 'selected' : ''}>None</option>
+          <option value="circle" ${layer.shapeMask === 'circle' || layer.shapeMask === 'ellipse' ? 'selected' : ''}>Circle</option>
           <option value="rounded-rectangle" ${layer.shapeMask === 'rounded-rectangle' ? 'selected' : ''}>Rounded Rect</option>
           <option value="star" ${layer.shapeMask === 'star' ? 'selected' : ''}>Star (5-pt)</option>
           <option value="heart" ${layer.shapeMask === 'heart' ? 'selected' : ''}>Heart</option>
@@ -172,7 +229,7 @@ export class Inspector {
         </select>
       </div>` : ''}
       <div class="inspector-group" style="margin-left:auto;gap:6px">
-        <button class="btn btn-secondary btn-sm" id="btn-center-layer" title="Center selected layer on canvas">⌖ Center on Canvas</button>
+        <button class="btn btn-secondary btn-sm" id="btn-center-layer" title="Center selected layer on canvas">⌖ Center</button>
       </div>
     `;
 
@@ -184,8 +241,32 @@ export class Inspector {
       this.session._emit('canvas-dirty');
     });
 
+    this._bindFlipMirrorEvents(layer);
+  }
+
+  _bindFlipMirrorEvents(layer) {
+    this.el.querySelector('#btn-flip-h')?.addEventListener('click', () => {
+      this.session.flipLayerH(layer.id);
+    });
+    this.el.querySelector('#btn-flip-v')?.addEventListener('click', () => {
+      this.session.flipLayerV(layer.id);
+    });
+    this.el.querySelector('#btn-mirror-h')?.addEventListener('click', () => {
+      this.session.mirrorLayerH(layer.id);
+    });
+    this.el.querySelector('#btn-mirror-v')?.addEventListener('click', () => {
+      this.session.mirrorLayerV(layer.id);
+    });
     this.el.querySelector('#btn-center-layer')?.addEventListener('click', () => {
-      this.session.centerActiveLayer();
+      const doc = this.session.document;
+      if (!doc || !layer) return;
+      this.session.beginEdit('Center Layer');
+      layer.transform.x = Math.round((doc.width - layer.transform.w) / 2);
+      layer.transform.y = Math.round((doc.height - layer.transform.h) / 2);
+      layer.markChanged();
+      this.session.endEdit();
+      this.session._emit('canvas-dirty');
+      this.session._emit('change');
     });
   }
 
@@ -195,9 +276,19 @@ export class Inspector {
         ${this._renderBadge('Bucket Fill', iconBucket(14))}
       </div>
       <div class="inspector-group" style="margin-left:4px">
+        <span class="inspector-label">Color</span>
+        <div style="width:18px;height:18px;border-radius:3px;border:1px solid var(--panel-border);background:${this.session.fgColor};box-shadow:0 1px 3px rgba(0,0,0,0.3)"></div>
+        <span class="inspector-val mono" style="font-weight:600">${this.session.fgColor.toUpperCase()}</span>
+      </div>
+      <div class="inspector-group">
         <span class="inspector-label">Tolerance</span>
-        <input type="range" class="opacity-slider" id="bucket-tol-slider" min="0" max="255" value="${this.session.bucketTolerance}" style="width:80px" />
+        <input type="range" class="opacity-slider" id="bucket-tol-slider" min="0" max="255" value="${this.session.bucketTolerance}" style="width:75px" />
         <span class="inspector-val mono" id="bucket-tol-val">${this.session.bucketTolerance}</span>
+      </div>
+      <div class="inspector-group">
+        <span class="inspector-label">Opacity</span>
+        <input type="range" class="opacity-slider" id="bucket-op-slider" min="1" max="100" value="${Math.round((this.session.bucketOpacity ?? 1.0) * 100)}" style="width:70px" />
+        <span class="inspector-val mono" id="bucket-op-val">${Math.round((this.session.bucketOpacity ?? 1.0) * 100)}%</span>
       </div>
       <div class="inspector-group">
         <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
@@ -212,7 +303,7 @@ export class Inspector {
         </label>
       </div>
       <div class="inspector-group" style="margin-left:auto">
-        <span class="inspector-placeholder">Click layer or selection to flood fill</span>
+        <span class="inspector-placeholder">Click to fill matching colors with target color</span>
       </div>
     `;
 
@@ -221,6 +312,13 @@ export class Inspector {
     tolSlider?.addEventListener('input', () => {
       this.session.bucketTolerance = parseInt(tolSlider.value, 10);
       tolVal.textContent = `${this.session.bucketTolerance}`;
+    });
+
+    const opSlider = this.el.querySelector('#bucket-op-slider');
+    const opVal    = this.el.querySelector('#bucket-op-val');
+    opSlider?.addEventListener('input', () => {
+      this.session.bucketOpacity = parseInt(opSlider.value, 10) / 100;
+      opVal.textContent = `${opSlider.value}%`;
     });
 
     this.el.querySelector('#bucket-contig-cb')?.addEventListener('change', (e) => {
@@ -363,23 +461,196 @@ export class Inspector {
   }
 
   _renderGradientInspector() {
+    const stops = this.session.gradientStops || [
+      { offset: 0, color: this.session.fgColor },
+      { offset: 1, color: this.session.bgColor },
+    ];
+    if (this._selectedGradStopIdx === undefined || this._selectedGradStopIdx >= stops.length) {
+      this._selectedGradStopIdx = 0;
+    }
+    const curStop = stops[this._selectedGradStopIdx] || stops[0];
+    const gradCss = stopsToCss(stops, 90);
+    const curPreset = this.session.gradientPreset || 'fg-bg';
+    const curSteps = this.session.gradientSteps || 0;
+    const curOpacity = Math.round((this.session.gradientOpacity ?? 1) * 100);
+    const hasSel = this.session.hasSelection?.() || false;
+
     this.el.innerHTML = `
       <div class="inspector-group">
         ${this._renderBadge('Gradient', iconGradient(14))}
       </div>
-      <div class="inspector-group" style="margin-left:4px">
+      <div class="inspector-group" style="margin-left:4px;display:flex;align-items:center;gap:6px">
         <span class="inspector-label">Type</span>
-        <select class="form-input" id="grad-type" style="width:100px;padding:2px 6px">
+        <select class="form-input" id="grad-type" style="width:72px;padding:2px 4px;font-size:11px">
           <option value="linear" ${this.session.gradientType === 'linear' ? 'selected' : ''}>Linear</option>
           <option value="radial" ${this.session.gradientType === 'radial' ? 'selected' : ''}>Radial</option>
         </select>
-        <div style="width:120px;height:18px;border-radius:3px;border:1px solid var(--panel-border);background:linear-gradient(to right, ${this.session.fgColor}, ${this.session.bgColor});margin-left:8px;"></div>
-        <span class="inspector-placeholder" style="margin-left:12px">Drag across layer to render gradient</span>
+
+        <span class="inspector-label" style="margin-left:2px">Preset</span>
+        <select class="form-input" id="grad-preset" style="width:125px;padding:2px 4px;font-size:11px">
+          <option value="fg-bg" ${curPreset === 'fg-bg' ? 'selected' : ''}>FG to BG</option>
+          <option value="fg-trans" ${curPreset === 'fg-trans' ? 'selected' : ''}>FG to Transparent</option>
+          <option value="rainbow-spectrum" ${curPreset === 'rainbow-spectrum' ? 'selected' : ''}>🌈 Rainbow (7 Colors)</option>
+          <option value="rainbow-pastel" ${curPreset === 'rainbow-pastel' ? 'selected' : ''}>☁️ Pastel Rainbow</option>
+          <option value="sunset-flame" ${curPreset === 'sunset-flame' ? 'selected' : ''}>🌅 Sunset Horizon</option>
+          <option value="cyberpunk-neon" ${curPreset === 'cyberpunk-neon' ? 'selected' : ''}>⚡ Cyberpunk Neon</option>
+          <option value="metallic-chrome" ${curPreset === 'metallic-chrome' ? 'selected' : ''}>✨ Silver Chrome</option>
+          <option value="golden-royal" ${curPreset === 'golden-royal' ? 'selected' : ''}>👑 Golden Royalty</option>
+          <option value="emerald-aurora" ${curPreset === 'emerald-aurora' ? 'selected' : ''}>🌲 Emerald Aurora</option>
+          <option value="ocean-deep" ${curPreset === 'ocean-deep' ? 'selected' : ''}>🌊 Ocean Depths</option>
+          <option value="fire-lava" ${curPreset === 'fire-lava' ? 'selected' : ''}>🔥 Molten Lava</option>
+          <option value="cotton-candy" ${curPreset === 'cotton-candy' ? 'selected' : ''}>🍬 Cotton Candy</option>
+          ${curPreset === 'custom' ? '<option value="custom" selected>Custom Multi-Point</option>' : ''}
+        </select>
+
+        <span class="inspector-label" style="margin-left:2px">Steps</span>
+        <select class="form-input" id="grad-steps-sel" style="width:85px;padding:2px 4px;font-size:11px" title="Choose smooth or stepped color bands">
+          <option value="0" ${curSteps === 0 ? 'selected' : ''}>Smooth</option>
+          <option value="2" ${curSteps === 2 ? 'selected' : ''}>2 Steps</option>
+          <option value="3" ${curSteps === 3 ? 'selected' : ''}>3 Steps</option>
+          <option value="4" ${curSteps === 4 ? 'selected' : ''}>4 Steps</option>
+          <option value="5" ${curSteps === 5 ? 'selected' : ''}>5 Steps</option>
+          <option value="6" ${curSteps === 6 ? 'selected' : ''}>6 Steps</option>
+          <option value="8" ${curSteps === 8 ? 'selected' : ''}>8 Steps</option>
+          <option value="12" ${curSteps === 12 ? 'selected' : ''}>12 Steps</option>
+          <option value="16" ${curSteps === 16 ? 'selected' : ''}>16 Steps</option>
+        </select>
+
+        <span class="inspector-label" style="margin-left:2px">Opacity</span>
+        <input type="range" class="opacity-slider" id="grad-opacity" min="1" max="100" value="${curOpacity}" style="width:48px;cursor:pointer;accent-color:var(--accent,#4f8ef7)" title="Gradient opacity (0-9 keys)" />
+        <span class="inspector-val mono" id="grad-opacity-val" style="min-width:26px;font-size:10px">${curOpacity}%</span>
+      </div>
+
+      <div class="inspector-group" style="display:flex;align-items:center;gap:6px">
+        <!-- Interactive Track with Clickable & Draggable Steps -->
+        <div id="grad-track" style="position:relative;width:115px;height:20px;border-radius:3px;border:1px solid var(--panel-border);background:${gradCss};cursor:crosshair;box-shadow:inset 0 0 2px rgba(0,0,0,0.5);box-sizing:border-box" title="Click bar to add color stop/step"></div>
+
+        <button class="btn btn-secondary btn-sm" id="btn-reverse-grad" style="padding:1px 6px;font-size:10px" title="Reverse gradient direction / color stops">⇄ Flip</button>
+
+        <!-- Active Step Color -->
+        <input type="color" id="grad-stop-color" value="${curStop.color.startsWith('#') && curStop.color.length === 7 ? curStop.color : '#000000'}" style="width:22px;height:20px;padding:0;border:1px solid rgba(255,255,255,0.25);border-radius:3px;background:none;cursor:pointer" title="Active step color" />
+
+        <!-- Step Position Slider -->
+        <span class="inspector-label" style="font-size:10px">Pos:</span>
+        <input type="range" id="grad-step-slider" min="0" max="100" value="${Math.round(curStop.offset * 100)}" style="width:45px;cursor:pointer;accent-color:var(--accent,#4f8ef7)" title="Move active step position" />
+        <span class="inspector-val mono" id="grad-step-val" style="min-width:28px;font-size:10px">${Math.round(curStop.offset * 100)}%</span>
+
+        <button class="btn btn-secondary btn-sm" id="btn-del-grad-stop" ${stops.length <= 2 ? 'disabled' : ''} style="padding:1px 5px;font-size:10px" title="Delete selected step">Del</button>
+
+        <button class="btn btn-secondary btn-sm" id="btn-fill-grad" style="padding:1px 7px;font-size:10px;margin-left:4px" title="${hasSel ? 'Fill current selection with gradient' : 'Fill active layer with gradient'}">${hasSel ? 'Fill Selection' : 'Fill Layer'}</button>
       </div>
     `;
 
+    // Render pins on grad-track
+    const track = this.el.querySelector('#grad-track');
+    stops.forEach((stop, idx) => {
+      const pin = document.createElement('div');
+      const isSel = idx === this._selectedGradStopIdx;
+      pin.style.cssText = `
+        position: absolute; top: -2px; left: calc(${stop.offset * 100}% - 4px);
+        width: 8px; height: 22px; border-radius: 2px;
+        background: ${stop.color};
+        border: 1.5px solid ${isSel ? '#ffffff' : '#000000'};
+        box-shadow: 0 0 2px rgba(0,0,0,0.8);
+        cursor: grab; z-index: ${isSel ? '10' : '2'};
+        box-sizing: border-box;
+      `;
+      pin.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._selectedGradStopIdx = idx;
+        this._renderGradientInspector();
+      });
+      pin.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        this._selectedGradStopIdx = idx;
+        pin.style.cursor = 'grabbing';
+        const rect = track.getBoundingClientRect();
+
+        const onMove = (moveEvt) => {
+          const curX = moveEvt.clientX - rect.left;
+          const newOffset = Math.max(0, Math.min(1, Number((curX / rect.width).toFixed(3))));
+          stops[this._selectedGradStopIdx].offset = newOffset;
+          stops.sort((a, b) => a.offset - b.offset);
+          this._selectedGradStopIdx = stops.findIndex(s => s.offset === newOffset);
+          this.session.setGradientStops(stops);
+          this._renderGradientInspector();
+        };
+
+        const onUp = () => {
+          pin.style.cursor = 'grab';
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+        };
+
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      });
+      track.appendChild(pin);
+    });
+
+    track.addEventListener('click', (e) => {
+      const rect = track.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const offset = Math.max(0, Math.min(1, Number((clickX / rect.width).toFixed(3))));
+      const sampledColor = sampleGradient(stops, offset);
+      stops.push({ offset, color: sampledColor });
+      this.session.setGradientStops(stops);
+      this._selectedGradStopIdx = this.session.gradientStops.findIndex(s => s.offset === offset);
+      this._renderGradientInspector();
+    });
+
     this.el.querySelector('#grad-type').addEventListener('change', (e) => {
       this.session.gradientType = e.target.value;
+    });
+
+    this.el.querySelector('#grad-preset').addEventListener('change', (e) => {
+      this.session.setGradientPreset(e.target.value);
+      this._selectedGradStopIdx = 0;
+      this._renderGradientInspector();
+    });
+
+    this.el.querySelector('#grad-steps-sel').addEventListener('change', (e) => {
+      this.session.setGradientSteps(parseInt(e.target.value, 10));
+    });
+
+    this.el.querySelector('#grad-opacity')?.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10) / 100;
+      this.session.setGradientOpacity(val);
+      const valSpan = this.el.querySelector('#grad-opacity-val');
+      if (valSpan) valSpan.textContent = `${Math.round(val * 100)}%`;
+    });
+
+    this.el.querySelector('#btn-reverse-grad')?.addEventListener('click', () => {
+      this.session.reverseGradient();
+      this._renderGradientInspector();
+    });
+
+    this.el.querySelector('#btn-fill-grad')?.addEventListener('click', () => {
+      this.session.fillGradient();
+    });
+
+    this.el.querySelector('#grad-stop-color').addEventListener('input', (e) => {
+      stops[this._selectedGradStopIdx].color = e.target.value;
+      this.session.setGradientStops(stops);
+      this._renderGradientInspector();
+    });
+
+    this.el.querySelector('#grad-step-slider').addEventListener('input', (e) => {
+      const newOffset = Math.max(0, Math.min(1, parseInt(e.target.value, 10) / 100));
+      stops[this._selectedGradStopIdx].offset = newOffset;
+      stops.sort((a, b) => a.offset - b.offset);
+      this._selectedGradStopIdx = stops.findIndex(s => s.offset === newOffset);
+      this.session.setGradientStops(stops);
+      this._renderGradientInspector();
+    });
+
+    this.el.querySelector('#btn-del-grad-stop')?.addEventListener('click', () => {
+      if (stops.length > 2) {
+        stops.splice(this._selectedGradStopIdx, 1);
+        this._selectedGradStopIdx = Math.max(0, this._selectedGradStopIdx - 1);
+        this.session.setGradientStops(stops);
+        this._renderGradientInspector();
+      }
     });
   }
 
@@ -700,7 +971,8 @@ export class Inspector {
       </div>
       <div class="inspector-group" style="margin-left:4px">
         <span class="inspector-label">Font</span>
-        <select class="form-input" id="text-font" style="width:120px;padding:2px 6px">
+        <select class="form-input" id="text-font" style="width:130px;padding:2px 6px">
+          <option value="'Plus Jakarta Sans', sans-serif" ${(s.fontFamily.includes('Jakarta') || s.fontFamily.includes('Plus Jakarta')) ? 'selected' : ''}>Jakarta</option>
           <option value="Inter, sans-serif" ${s.fontFamily.startsWith('Inter') ? 'selected' : ''}>Inter</option>
           <option value="Arial, sans-serif" ${s.fontFamily.startsWith('Arial') ? 'selected' : ''}>Arial</option>
           <option value="Georgia, serif" ${s.fontFamily.startsWith('Georgia') ? 'selected' : ''}>Georgia</option>
@@ -710,6 +982,7 @@ export class Inspector {
           <option value="'Segoe UI', sans-serif" ${s.fontFamily.includes('Segoe') ? 'selected' : ''}>Segoe UI</option>
           <option value="Consolas, monospace" ${s.fontFamily.startsWith('Consolas') ? 'selected' : ''}>Consolas</option>
           <option value="Impact, sans-serif" ${s.fontFamily.startsWith('Impact') ? 'selected' : ''}>Impact</option>
+          <option value="'Trebuchet MS', sans-serif" ${s.fontFamily.includes('Trebuchet') ? 'selected' : ''}>Trebuchet MS</option>
         </select>
       </div>
       <div class="inspector-group">
@@ -738,7 +1011,7 @@ export class Inspector {
         <span class="inspector-val mono" id="text-ls-val">${s.letterSpacing}px</span>
       </div>
       <div class="inspector-group" style="margin-left:auto">
-        <span class="inspector-placeholder">Click on canvas to place text</span>
+        <span class="inspector-placeholder">Drag on canvas to place text box</span>
       </div>
     `;
 

@@ -19,6 +19,15 @@ const testFiles = [
   path.join(__dirname, 'project.test.js'),
   path.join(__dirname, 'adjustments.test.js'),
   path.join(__dirname, 'newCanvas.test.js'),
+  path.join(__dirname, 'layerDialogs.test.js'),
+  path.join(__dirname, 'cursorTool.test.js'),
+  path.join(__dirname, 'mirrorFlip.test.js'),
+  path.join(__dirname, 'blurPerformance.test.js'),
+  path.join(__dirname, 'clipart.test.js'),
+  path.join(__dirname, 'wordart.test.js'),
+  path.join(__dirname, 'gradient.test.js'),
+  path.join(__dirname, 'tabs.test.js'),
+  path.join(__dirname, 'bucket.test.js'),
 ];
 
 const stream = run({

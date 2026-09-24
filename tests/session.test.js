@@ -393,31 +393,33 @@ describe('EditorSession & Undo/Redo Engine', () => {
     assert.equal(textLayer.pixelW, contractedW);
     assert.equal(textLayer.pixelH, contractedH);
 
-    // Step 4: Centered alignment dynamic anchoring
+    // Step 4: Text box origin remains fixed when changing text alignment
     renderTextToLayer(textLayer, 500, 300, {
-      text: 'Centered Short',
+      text: 'Alignment Test',
+      fontSize: 20,
+      fontFamily: 'Inter, sans-serif',
+      textAlign: 'left',
+    });
+    assert.equal(textLayer.transform.x, 500);
+    assert.equal(textLayer.transform.y, 300);
+
+    renderTextToLayer(textLayer, 500, 300, {
+      text: 'Alignment Test',
       fontSize: 20,
       fontFamily: 'Inter, sans-serif',
       textAlign: 'center',
     });
-    const centerShortW = textLayer.transform.w;
-    const centerShortX = textLayer.transform.x;
+    assert.equal(textLayer.transform.x, 500, 'Changing alignment to center must not shift textbox position');
+    assert.equal(textLayer.transform.y, 300);
 
     renderTextToLayer(textLayer, 500, 300, {
-      text: 'Centered Very Long Title String That Expands Both Ways',
+      text: 'Alignment Test',
       fontSize: 20,
       fontFamily: 'Inter, sans-serif',
-      textAlign: 'center',
+      textAlign: 'right',
     });
-    const centerLongW = textLayer.transform.w;
-    const centerLongX = textLayer.transform.x;
-
-    assert.ok(centerLongW > centerShortW);
-    // Center point in document coordinates must remain fixed around 500
-    const centerShortMid = centerShortX + centerShortW / 2;
-    const centerLongMid = centerLongX + centerLongW / 2;
-    assert.ok(Math.abs(centerShortMid - 500) <= 2, `Center anchor short mid (${centerShortMid}) close to 500`);
-    assert.ok(Math.abs(centerLongMid - 500) <= 2, `Center anchor long mid (${centerLongMid}) close to 500`);
+    assert.equal(textLayer.transform.x, 500, 'Changing alignment to right must not shift textbox position');
+    assert.equal(textLayer.transform.y, 300);
   });
 
   it('performs layer cut, copy, paste, and paste-in-place with history tracking', () => {

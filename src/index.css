@@ -376,7 +376,7 @@ html, body {
 #canvas-area[data-tool="shape"],
 #canvas-area[data-tool="marquee"],
 #canvas-area[data-tool="gradient"] { cursor: crosshair; }
-#canvas-area[data-tool="text"] { cursor: text; }
+#canvas-area[data-tool="text"] { cursor: crosshair; }
 #canvas-area.drop-target { outline: 2px dashed var(--accent); outline-offset: -4px; }
 
 /* Zoom info overlay */
@@ -888,6 +888,10 @@ html, body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   line-height: 1.3;
 }
+.layer-row.locked .layer-name,
+.layer-name.locked {
+  font-style: italic;
+}
 .layer-name-input {
   font-size: 12px; color: var(--text);
   background: var(--input-bg);
@@ -906,11 +910,15 @@ html, body {
   background: var(--overlay-bg);
   backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center;
-  z-index: 1000;
+  z-index: 10000;
   opacity: 0;
   animation: fade-in 140ms ease forwards;
 }
 @keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes fadeIn {
   from { opacity: 0; }
   to   { opacity: 1; }
 }

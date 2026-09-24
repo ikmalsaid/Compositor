@@ -107,12 +107,15 @@ function createWindow() {
   const indexPath = path.join(__dirname, '..', 'src', 'index.html');
   mainWindow.loadFile(indexPath);
 
+  let isClosingConfirmed = false;
   mainWindow.on('close', (e) => {
-    mainWindow.webContents.send('app:before-close');
+    if (isClosingConfirmed) return;
     e.preventDefault();
+    mainWindow.webContents.send('app:before-close');
   });
 
-  ipcMain.once('app:confirm-close', () => {
+  ipcMain.on('app:confirm-close', () => {
+    isClosingConfirmed = true;
     mainWindow.destroy();
   });
 
@@ -202,6 +205,16 @@ function buildMenu(enabled = isAppReady) {
         { type: 'separator' },
         { label: 'Flip Layer Horizontal', enabled, click: () => send('menu:flip-layer-h') },
         { label: 'Flip Layer Vertical',   enabled, click: () => send('menu:flip-layer-v') },
+        { type: 'separator' },
+        { label: 'Mirror Horizontal (Duplicate)', enabled, click: () => send('menu:mirror-layer-h') },
+        { label: 'Mirror Vertical (Duplicate)',   enabled, click: () => send('menu:mirror-layer-v') },
+      ],
+    },
+    {
+      label: 'Insert',
+      submenu: [
+        { label: 'Clip Art…',  accelerator: 'CmdOrCtrl+Shift+I', enabled, click: () => send('menu:insert-clipart') },
+        { label: 'WordArt…',   accelerator: 'CmdOrCtrl+Shift+W', enabled, click: () => send('menu:insert-wordart') },
       ],
     },
     {
@@ -225,8 +238,6 @@ function buildMenu(enabled = isAppReady) {
         { label: 'Gaussian Blur…', enabled, click: () => send('menu:filters-gaussian') },
         { label: 'Motion Blur…', enabled, click: () => send('menu:filters-motion') },
         { label: 'Radial Blur…', enabled, click: () => send('menu:filters-radial') },
-        { type: 'separator' },
-        { label: 'Blur & Filters…', enabled, click: () => send('menu:filters') },
       ],
     },
     {
@@ -276,8 +287,8 @@ function buildMenu(enabled = isAppReady) {
     {
       label: 'Help',
       submenu: [
-        { label: 'GitHub Repository', click: () => shell.openExternal('https://github.com/compositor/compositor-win') },
-        { label: 'Report an Issue',   click: () => shell.openExternal('https://github.com/compositor/compositor-win/issues') },
+        { label: 'GitHub Repository', click: () => shell.openExternal('https://github.com/ikmalsaid/compositor') },
+        { label: 'Report an Issue',   click: () => shell.openExternal('https://github.com/ikmalsaid/compositor/issues') },
       ],
     },
   ];

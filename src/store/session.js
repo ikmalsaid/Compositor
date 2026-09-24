@@ -5,8 +5,10 @@
 
 import { CanvasDocument, ImageLayer, LayerTransform, newUUID, LayerBlendMode, blendModeToCompositeOp } from './document.js';
 import { DocumentHistory } from './history.js';
+import { GRADIENT_PRESETS, normalizeStops, sampleGradient } from '../assets/gradientData.js';
 
 export const Tool = Object.freeze({
+  CURSOR:      'cursor',
   MOVE:        'move',
   BRUSH:       'brush',
   ERASER:      'eraser',
@@ -28,7 +30,7 @@ export const Tool = Object.freeze({
 
 /** Tools that have full implementations */
 export const IMPLEMENTED_TOOLS = new Set([
-  Tool.MOVE, Tool.HAND, Tool.ZOOM, Tool.BRUSH, Tool.ERASER,
+  Tool.CURSOR, Tool.MOVE, Tool.HAND, Tool.ZOOM, Tool.BRUSH, Tool.ERASER,
   Tool.EYEDROPPER, Tool.SHAPE, Tool.BUCKET, Tool.GRADIENT, Tool.CROP,
   Tool.MARQUEE, Tool.LASSO, Tool.WAND, Tool.CLONE, Tool.HEAL,
   Tool.BLUR, Tool.TEXT
@@ -60,7 +62,7 @@ export class EditorSession extends EventTarget {
     this.document      = null;      // CanvasDocument | null
     this.activeLayerID = null;   // UUID string | null
     this.selectedLayerIDs = new Set();
-    this.tool          = Tool.MOVE;
+    this.tool          = Tool.CURSOR;
     this.projectURL    = null;      // file path | null
     this.isModified    = false;
 
@@ -82,8 +84,16 @@ export class EditorSession extends EventTarget {
     this.bucketTolerance = 32;
     this.bucketContiguous = true;
     this.bucketSampleAll  = true;
+    this.bucketOpacity    = 1.0;
 
-    this.gradientType  = 'linear'; // linear | radial
+    this.gradientType   = 'linear'; // linear | radial
+    this.gradientPreset = 'fg-bg';  // 'fg-bg' | 'fg-trans' | preset ID | 'custom'
+    this.gradientStops  = [
+      { offset: 0, color: this.fgColor },
+      { offset: 1, color: this.bgColor },
+    ];
+    this.gradientSteps  = 0; // 0 = smooth, or N >= 2 for stepped color bands
+    this.gradientOpacity = 1.0;
 
     // Selection & Crop
     this.selectionRect = null; // { x, y, w, h } | null (in doc coords)
@@ -109,7 +119,7 @@ export class EditorSession extends EventTarget {
 
     // Text tool settings
     this.fontSize       = 48;
-    this.fontFamily     = 'Inter, sans-serif';
+    this.fontFamily     = "'Plus Jakarta Sans', sans-serif";
     this.fontWeight     = 'normal'; // normal | bold
     this.fontStyle      = 'normal'; // normal | italic
     this.textAlign      = 'left';   // left | center | right
@@ -140,6 +150,12 @@ export class EditorSession extends EventTarget {
 
   get canUndo() { return this.history.canUndo; }
   get canRedo() { return this.history.canRedo; }
+
+  get activeLayerId() { return this.activeLayerID; }
+  set activeLayerId(v) { this.activeLayerID = v; }
+
+  get selectedLayerIds() { return this.selectedLayerIDs; }
+  set selectedLayerIds(v) { this.selectedLayerIDs = v; }
 
   setTool(tool) {
     if (this.tool === tool) return;
@@ -915,7 +931,7 @@ export class EditorSession extends EventTarget {
     this._emit('change');
   }
 
-  // ─── Flip Operations ────────────────────────────────────────────────────────
+  // ─── Flip & Mirror Operations ───────────────────────────────────────────────
 
   flipLayerH(id = this.activeLayerID) {
     if (!this.document || !id) return;
@@ -941,6 +957,66 @@ export class EditorSession extends EventTarget {
     this._emit('change');
   }
 
+  mirrorLayerH(id = this.activeLayerID, mode = 'offset') {
+    if (!this.document || !id) return null;
+    const orig = this.document.layerByID(id);
+    if (!orig || orig.isGroup) return null;
+
+    this.beginEdit('Mirror Layer Horizontal');
+    const clone = orig.clone();
+    clone.id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : ('layer_' + Math.random().toString(36).slice(2, 9));
+    clone.name = `${orig.name} (Mirror H)`;
+    clone.transform.flipX = !orig.transform.flipX;
+
+    if (mode === 'offset' || mode === 'adjacent') {
+      clone.transform.x = orig.transform.x + orig.transform.w + 20;
+    } else if (mode === 'center') {
+      clone.transform.x = this.document.width - (orig.transform.x + orig.transform.w);
+    } else if (mode === 'in-place') {
+      clone.transform.x = orig.transform.x;
+    }
+    clone.markChanged();
+
+    const idx = this.document.indexOfID(id);
+    this.document.layers.splice(idx + 1, 0, clone);
+    this.activeLayerID = clone.id;
+    this.selectedLayerIDs = new Set([clone.id]);
+    this.endEdit();
+    this._emit('canvas-dirty');
+    this._emit('change');
+    return clone;
+  }
+
+  mirrorLayerV(id = this.activeLayerID, mode = 'offset') {
+    if (!this.document || !id) return null;
+    const orig = this.document.layerByID(id);
+    if (!orig || orig.isGroup) return null;
+
+    this.beginEdit('Mirror Layer Vertical');
+    const clone = orig.clone();
+    clone.id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : ('layer_' + Math.random().toString(36).slice(2, 9));
+    clone.name = `${orig.name} (Mirror V)`;
+    clone.transform.flipY = !orig.transform.flipY;
+
+    if (mode === 'offset' || mode === 'adjacent') {
+      clone.transform.y = orig.transform.y + orig.transform.h + 20;
+    } else if (mode === 'center') {
+      clone.transform.y = this.document.height - (orig.transform.y + orig.transform.h);
+    } else if (mode === 'in-place') {
+      clone.transform.y = orig.transform.y;
+    }
+    clone.markChanged();
+
+    const idx = this.document.indexOfID(id);
+    this.document.layers.splice(idx + 1, 0, clone);
+    this.activeLayerID = clone.id;
+    this.selectedLayerIDs = new Set([clone.id]);
+    this.endEdit();
+    this._emit('canvas-dirty');
+    this._emit('change');
+    return clone;
+  }
+
   flipCanvasH() {
     if (!this.document) return;
     this.beginEdit('Flip Canvas Horizontal');
@@ -963,6 +1039,106 @@ export class EditorSession extends EventTarget {
     }
     this.endEdit();
     this._emit('canvas-dirty');
+  }
+
+  /**
+   * Insert a rasterized Clipart onto a new layer centered on canvas
+   * @param {HTMLImageElement|HTMLCanvasElement|string} svgDataOrUrl
+   * @param {string} [name='Clipart']
+   * @param {object} [opts]
+   */
+  insertClipart(svgDataOrUrl, name = 'Clipart', opts = {}) {
+    if (!this.document) return null;
+    const doc = this.document;
+    const layerW = opts.width || opts.pixelW || 400;
+    const layerH = opts.height || opts.pixelH || 400;
+
+    const layer = new ImageLayer({
+      name: name || 'Clipart',
+      pixelW: layerW,
+      pixelH: layerH,
+      transform: new LayerTransform({
+        x: Math.round((doc.width - layerW) / 2),
+        y: Math.round((doc.height - layerH) / 2),
+        w: layerW,
+        h: layerH,
+      }),
+    });
+
+    const ctx = layer.ctx;
+    if (typeof svgDataOrUrl === 'string') {
+      if (typeof Image !== 'undefined') {
+        const img = new Image();
+        img.onload = () => {
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, layerW, layerH);
+            layer.markChanged();
+            this._emit('canvas-dirty');
+          }
+        };
+        if (svgDataOrUrl.startsWith('data:') || svgDataOrUrl.startsWith('http') || svgDataOrUrl.startsWith('blob:')) {
+          img.src = svgDataOrUrl;
+        } else {
+          img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgDataOrUrl)}`;
+        }
+      }
+    } else if (svgDataOrUrl && ctx && (svgDataOrUrl.width || svgDataOrUrl.naturalWidth)) {
+      ctx.drawImage(svgDataOrUrl, 0, 0, layerW, layerH);
+    }
+
+    layer.markChanged();
+
+    this.beginEdit(`Insert Clipart: ${name}`);
+    let insertIdx = this.activeLayerID ? doc.indexOfID(this.activeLayerID) + 1 : doc.layers.length;
+    if (insertIdx <= 0 || insertIdx > doc.layers.length) insertIdx = doc.layers.length;
+    doc.layers.splice(insertIdx, 0, layer);
+    this.activeLayerID = layer.id;
+    this.selectedLayerIDs = new Set([layer.id]);
+    this.setTool(Tool.CURSOR);
+    this.endEdit();
+    this._emit('change');
+    this._emit('canvas-dirty');
+    return layer;
+  }
+
+  /**
+   * Insert a rendered WordArt canvas/image onto a new layer centered on canvas
+   * @param {HTMLCanvasElement|HTMLImageElement} wordartCanvas
+   * @param {string} [text='WordArt']
+   * @param {object} [opts]
+   */
+  insertWordArt(wordartCanvas, text = 'WordArt', opts = {}) {
+    if (!this.document || !wordartCanvas) return null;
+    const doc = this.document;
+    const w = wordartCanvas.width || 400;
+    const h = wordartCanvas.height || 160;
+
+    const layer = new ImageLayer({
+      name: opts.name || `WordArt (${text.slice(0, 20)})`,
+      pixelW: w,
+      pixelH: h,
+      transform: new LayerTransform({
+        x: Math.round((doc.width - w) / 2),
+        y: Math.round((doc.height - h) / 2),
+        w: w,
+        h: h,
+      }),
+    });
+
+    if (layer.ctx) layer.ctx.drawImage(wordartCanvas, 0, 0);
+    layer.markChanged();
+
+    this.beginEdit(`Insert WordArt: ${text.slice(0, 20)}`);
+    let insertIdx = this.activeLayerID ? doc.indexOfID(this.activeLayerID) + 1 : doc.layers.length;
+    if (insertIdx <= 0 || insertIdx > doc.layers.length) insertIdx = doc.layers.length;
+    doc.layers.splice(insertIdx, 0, layer);
+    this.activeLayerID = layer.id;
+    this.selectedLayerIDs = new Set([layer.id]);
+    this.setTool(Tool.CURSOR);
+    this.endEdit();
+    this._emit('change');
+    this._emit('canvas-dirty');
+    return layer;
   }
 
   invertActiveLayer() {
@@ -1045,8 +1221,8 @@ export class EditorSession extends EventTarget {
     layer.markChanged();
 
     this.cropRect = null;
-    this.tool = Tool.MOVE;
-    this._emit('tool-change', { tool: Tool.MOVE });
+    this.tool = Tool.CURSOR;
+    this._emit('tool-change', { tool: Tool.CURSOR });
     this.endEdit();
     this._emit('change');
     this._emit('canvas-dirty');
@@ -1076,8 +1252,8 @@ export class EditorSession extends EventTarget {
     }
 
     this.cropRect = null;
-    this.tool = Tool.MOVE;
-    this._emit('tool-change', { tool: Tool.MOVE });
+    this.tool = Tool.CURSOR;
+    this._emit('tool-change', { tool: Tool.CURSOR });
     this.endEdit();
     this._emit('change');
     this._emit('canvas-dirty');
@@ -1293,27 +1469,175 @@ export class EditorSession extends EventTarget {
 
   // ─── Color Palette ──────────────────────────────────────────────────────────
 
+  _syncGradientStops() {
+    if (this.gradientPreset === 'fg-bg') {
+      this.gradientStops = [
+        { offset: 0, color: this.fgColor },
+        { offset: 1, color: this.bgColor },
+      ];
+    } else if (this.gradientPreset === 'fg-trans') {
+      this.gradientStops = [
+        { offset: 0, color: this.fgColor },
+        { offset: 1, color: 'transparent' },
+      ];
+    }
+  }
+
   setFgColor(color) {
     this.fgColor = color;
+    this._syncGradientStops();
     this._emit('color-change', { fgColor: this.fgColor, bgColor: this.bgColor });
+    this._emit('change');
   }
 
   setBgColor(color) {
     this.bgColor = color;
+    this._syncGradientStops();
     this._emit('color-change', { fgColor: this.fgColor, bgColor: this.bgColor });
+    this._emit('change');
   }
 
   swapColors() {
     const tmp = this.fgColor;
     this.fgColor = this.bgColor;
     this.bgColor = tmp;
+    this._syncGradientStops();
     this._emit('color-change', { fgColor: this.fgColor, bgColor: this.bgColor });
+    this._emit('change');
   }
 
   resetColors() {
     this.fgColor = '#000000';
     this.bgColor = '#ffffff';
+    this._syncGradientStops();
     this._emit('color-change', { fgColor: this.fgColor, bgColor: this.bgColor });
+    this._emit('change');
+  }
+
+  setGradientPreset(presetId) {
+    this.gradientPreset = presetId;
+    if (presetId === 'fg-bg') {
+      this.gradientStops = [
+        { offset: 0, color: this.fgColor },
+        { offset: 1, color: this.bgColor },
+      ];
+    } else if (presetId === 'fg-trans') {
+      this.gradientStops = [
+        { offset: 0, color: this.fgColor },
+        { offset: 1, color: 'transparent' },
+      ];
+    } else if (GRADIENT_PRESETS[presetId]) {
+      this.gradientStops = normalizeStops(GRADIENT_PRESETS[presetId].stops);
+    }
+    this._emit('change');
+  }
+
+  setGradientStops(stops) {
+    this.gradientStops = normalizeStops(stops);
+    this.gradientPreset = 'custom';
+    this._emit('change');
+  }
+
+  setGradientSteps(steps) {
+    this.gradientSteps = Math.max(0, parseInt(steps, 10) || 0);
+    this._emit('change');
+  }
+
+  setGradientOpacity(opacity) {
+    this.gradientOpacity = Math.max(0, Math.min(1, typeof opacity === 'number' ? opacity : 1.0));
+    this._emit('change');
+  }
+
+  reverseGradient() {
+    if (!this.gradientStops || this.gradientStops.length < 2) return;
+    const reversed = this.gradientStops.map(s => ({
+      offset: Number((1 - s.offset).toFixed(4)),
+      color: s.color,
+    })).sort((a, b) => a.offset - b.offset);
+    this.gradientStops = reversed;
+    this.gradientPreset = 'custom';
+    this._emit('change');
+    this._emit('canvas-dirty');
+  }
+
+  fillGradient(options = {}) {
+    let layer = this.activeLayer;
+    if (!layer || layer.isGroup || layer.isLocked) {
+      layer = this.addBlankLayer(this.getNextLayerName('Gradient'), { fullCanvas: true });
+    }
+
+    this.beginEdit('Fill Gradient');
+    const ctx = layer.ctx;
+    ctx.save();
+
+    const scaleX = layer.pixelW / layer.transform.w;
+    const scaleY = layer.pixelH / layer.transform.h;
+
+    // Clip to selection if active
+    if (this.selectionPath && this.selectionPath.length > 2) {
+      ctx.beginPath();
+      const first = this.selectionPath[0];
+      ctx.moveTo((first.x - layer.transform.x) * scaleX, (first.y - layer.transform.y) * scaleY);
+      for (let i = 1; i < this.selectionPath.length; i++) {
+        const pt = this.selectionPath[i];
+        ctx.lineTo((pt.x - layer.transform.x) * scaleX, (pt.y - layer.transform.y) * scaleY);
+      }
+      ctx.closePath();
+      ctx.clip();
+    } else if (this.selectionRect) {
+      const sr = this.selectionRect;
+      const rx = (sr.x - layer.transform.x) * scaleX;
+      const ry = (sr.y - layer.transform.y) * scaleY;
+      const rw = sr.w * scaleX;
+      const rh = sr.h * scaleY;
+      ctx.beginPath();
+      ctx.rect(rx, ry, rw, rh);
+      ctx.clip();
+    }
+
+    let g;
+    if (this.gradientType === 'radial') {
+      const cx = layer.pixelW / 2;
+      const cy = layer.pixelH / 2;
+      const r = Math.max(cx, cy);
+      g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    } else {
+      const x1 = options.x1 ?? 0;
+      const y1 = options.y1 ?? 0;
+      const x2 = options.x2 ?? 0;
+      const y2 = options.y2 ?? layer.pixelH;
+      g = ctx.createLinearGradient(x1, y1, x2, y2);
+    }
+
+    const stops = this.gradientStops || [
+      { offset: 0, color: this.fgColor },
+      { offset: 1, color: this.bgColor },
+    ];
+    const stepsCount = this.gradientSteps || 0;
+    if (stepsCount >= 2) {
+      for (let i = 0; i < stepsCount; i++) {
+        const t0 = i / stepsCount;
+        const t1 = (i + 1) / stepsCount;
+        const col = sampleGradient(stops, (i + 0.5) / stepsCount);
+        const parsedCol = col === 'transparent' ? 'rgba(0,0,0,0)' : col;
+        g.addColorStop(Math.max(0, Math.min(1, t0)), parsedCol);
+        g.addColorStop(Math.max(0, Math.min(1, t1 - 0.0001)), parsedCol);
+      }
+    } else {
+      for (const stop of stops) {
+        const col = stop.color === 'transparent' ? 'rgba(0,0,0,0)' : stop.color;
+        g.addColorStop(Math.max(0, Math.min(1, stop.offset)), col);
+      }
+    }
+
+    ctx.globalAlpha = Math.max(0, Math.min(1, this.gradientOpacity ?? 1.0));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, layer.pixelW, layer.pixelH);
+
+    ctx.restore();
+    layer.markChanged();
+    this.endEdit();
+    this._emit('canvas-dirty');
   }
 
   // ─── Transform (Move tool) ──────────────────────────────────────────────────

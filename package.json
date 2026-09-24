@@ -1,29 +1,33 @@
 {
-  "name": "compositor-win",
+  "name": "compositor",
   "productName": "Compositor",
   "version": "1.0.0",
   "description": "Free open-source image editor for Windows",
+  "author": "ikmalsaid",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node tests/run-all.js",
-    "build": "electron-builder --win"
+    "build": "electron-builder --win",
+    "update-cliparts": "node scripts/syncFluentEmoji.js"
   },
   "dependencies": {
+    "@iconify-json/fluent-emoji": "^1.2.7",
+    "@iconify/utils": "^3.1.7",
     "electron-updater": "^6.3.9",
     "jszip": "^3.10.1",
     "onnxruntime-web": "^1.30.0",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.4",
     "uuid": "^11.0.3"
   },
   "devDependencies": {
-    "electron": "^33.4.11",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.compositor.win",
+    "appId": "com.ikmalsaid.compositor",
     "productName": "Compositor",
-    "copyright": "MIT License",
+    "copyright": "Copyright © ikmalsaid",
     "files": [
       "electron/**/*",
       "src/**/*",
@@ -36,9 +40,16 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
       ],
-      "icon": "src/assets/icon.ico"
+      "icon": "src/assets/icon.ico",
+      "publisherName": "ikmalsaid"
     },
     "nsis": {
       "oneClick": false,
@@ -47,8 +58,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "compositor",
-      "repo": "compositor-win"
+      "owner": "ikmalsaid",
+      "repo": "compositor"
     }
   },
   "allowScripts": {

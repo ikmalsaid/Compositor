@@ -4,34 +4,35 @@
 
 import { Tool } from '../store/session.js';
 import {
-  iconMove, iconMarquee, iconLasso, iconWand, iconCrop,
+  iconCursor, iconMove, iconMarquee, iconLasso, iconWand, iconCrop,
   iconEyedropper, iconBrush, iconEraser, iconClone, iconHeal,
   iconBlur, iconGradient, iconBucket, iconShape, iconText,
   iconHand, iconZoom, iconSwap, iconResetColor
 } from './icons.js';
 
 const TOOLS = [
-  { id: Tool.MOVE,       icon: iconMove(15),       label: 'Move',          key: 'V' },
-  { id: Tool.MARQUEE,    icon: iconMarquee(15),    label: 'Marquee Rect',  key: 'M' },
-  { id: Tool.LASSO,      icon: iconLasso(15),      label: 'Lasso',         key: 'L' },
-  { id: Tool.WAND,       icon: iconWand(15),       label: 'Magic Wand',    key: 'W' },
+  { id: Tool.CURSOR,     icon: iconCursor(15),     label: 'Cursor / Select', key: 'V' },
+  { id: Tool.MOVE,       icon: iconMove(15),       label: 'Move / Transform',key: 'M' },
+  { id: Tool.MARQUEE,    icon: iconMarquee(15),    label: 'Marquee Rect',   key: 'Q' },
+  { id: Tool.LASSO,      icon: iconLasso(15),      label: 'Lasso',          key: 'L' },
+  { id: Tool.WAND,       icon: iconWand(15),       label: 'Magic Wand',     key: 'W' },
   null, // separator
-  { id: Tool.CROP,       icon: iconCrop(15),       label: 'Crop Tool',     key: 'C' },
-  { id: Tool.EYEDROPPER, icon: iconEyedropper(15), label: 'Eyedropper',    key: 'I' },
+  { id: Tool.CROP,       icon: iconCrop(15),       label: 'Crop Tool',      key: 'C' },
+  { id: Tool.EYEDROPPER, icon: iconEyedropper(15), label: 'Eyedropper',     key: 'I' },
   null,
-  { id: Tool.BRUSH,      icon: iconBrush(15),      label: 'Brush Tool',    key: 'B' },
-  { id: Tool.ERASER,     icon: iconEraser(15),     label: 'Eraser Tool',   key: 'E' },
-  { id: Tool.CLONE,      icon: iconClone(15),      label: 'Clone Stamp',   key: 'S' },
-  { id: Tool.HEAL,       icon: iconHeal(15),       label: 'Spot Healing',  key: 'J' },
-  { id: Tool.BLUR,       icon: iconBlur(15),       label: 'Blur Tool',     key: 'R' },
+  { id: Tool.BRUSH,      icon: iconBrush(15),      label: 'Brush Tool',     key: 'B' },
+  { id: Tool.ERASER,     icon: iconEraser(15),     label: 'Eraser Tool',    key: 'E' },
+  { id: Tool.CLONE,      icon: iconClone(15),      label: 'Clone Stamp',    key: 'S' },
+  { id: Tool.HEAL,       icon: iconHeal(15),       label: 'Spot Healing',   key: 'J' },
+  { id: Tool.BLUR,       icon: iconBlur(15),       label: 'Blur Tool',      key: 'R' },
   null,
-  { id: Tool.GRADIENT,   icon: iconGradient(15),   label: 'Gradient Tool', key: 'G' },
-  { id: Tool.BUCKET,     icon: iconBucket(15),     label: 'Paint Bucket',  key: 'K' },
-  { id: Tool.SHAPE,      icon: iconShape(15),      label: 'Shape Tool',    key: 'U' },
-  { id: Tool.TEXT,       icon: iconText(15),       label: 'Text Tool',     key: 'T' },
+  { id: Tool.GRADIENT,   icon: iconGradient(15),   label: 'Gradient Tool',  key: 'G' },
+  { id: Tool.BUCKET,     icon: iconBucket(15),     label: 'Paint Bucket',   key: 'K' },
+  { id: Tool.SHAPE,      icon: iconShape(15),      label: 'Shape Tool',     key: 'U' },
+  { id: Tool.TEXT,       icon: iconText(15),       label: 'Text Tool',      key: 'T' },
   null,
-  { id: Tool.HAND,       icon: iconHand(15),       label: 'Hand (Pan)',    key: 'H' },
-  { id: Tool.ZOOM,       icon: iconZoom(15),       label: 'Zoom Tool',     key: 'Z' },
+  { id: Tool.HAND,       icon: iconHand(15),       label: 'Hand (Pan)',     key: 'H' },
+  { id: Tool.ZOOM,       icon: iconZoom(15),       label: 'Zoom Tool',      key: 'Z' },
 ];
 
 export class Toolbar {

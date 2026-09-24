@@ -12,6 +12,8 @@ import {
   getRecentCanvasSizes,
   addRecentCanvasSize,
   removeRecentCanvasSize,
+  getShowOnStartup,
+  setShowOnStartup,
 } from '../src/ui/panels/newCanvas.js';
 
 describe('New Canvas Catalogue & Recents Engine', () => {
@@ -120,6 +122,14 @@ describe('New Canvas Catalogue & Recents Engine', () => {
     const ids = PRESET_CATALOGUE.map(p => p.id);
     const uniqueIds = new Set(ids);
     assert.strictEqual(uniqueIds.size, ids.length, 'All preset IDs must be strictly unique');
+  });
+
+  it('manages show on startup preference and defaults to true', () => {
+    assert.strictEqual(getShowOnStartup(), true);
+    setShowOnStartup(false);
+    assert.strictEqual(getShowOnStartup(), false);
+    setShowOnStartup(true);
+    assert.strictEqual(getShowOnStartup(), true);
   });
 });
 

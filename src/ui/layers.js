@@ -5,6 +5,7 @@
 import { LayerBlendMode } from '../store/document.js';
 import { removeBackground } from '../ai/backgroundRemoval.js';
 import { showContextMenu } from './panels/contextMenu.js';
+import { promptDeleteLayers } from './panels/layerDialogs.js';
 import {
   iconEye, iconEyeOff, iconLock, iconLockOpen,
   iconFolder, iconLayer, iconChevronRight, iconChevronDown
@@ -112,7 +113,7 @@ export class LayersPanel {
       if (this.session.activeLayerID) this.session.duplicateLayer(this.session.activeLayerID);
     });
     document.getElementById('btn-delete-layer').addEventListener('click', () => {
-      this.session.deleteSelectedLayers();
+      promptDeleteLayers(this.session);
     });
 
     // Context menu on empty area of layers list
@@ -202,6 +203,7 @@ export class LayersPanel {
 
     const isSelected = this.session.selectedLayerIDs.has(layer.id) || this.session.activeLayerID === layer.id;
     if (isSelected) row.classList.add('selected');
+    if (layer.isLocked) row.classList.add('locked');
 
     // Indent
     if (depth > 0) {
@@ -269,7 +271,7 @@ export class LayersPanel {
     const info = document.createElement('div');
     info.className = 'layer-info';
     const nameEl = document.createElement('div');
-    nameEl.className = 'layer-name';
+    nameEl.className = 'layer-name' + (layer.isLocked ? ' locked' : '');
     nameEl.textContent = layer.name;
     const meta = document.createElement('div');
     meta.className = 'layer-meta';
@@ -511,6 +513,8 @@ export class LayersPanel {
       ] : []),
       { label: 'Flip Horizontal',    action: () => s.flipLayerH(layer.id) },
       { label: 'Flip Vertical',      action: () => s.flipLayerV(layer.id) },
+      { label: 'Mirror Horizontal (Duplicate)', action: () => s.mirrorLayerH(layer.id) },
+      { label: 'Mirror Vertical (Duplicate)',   action: () => s.mirrorLayerV(layer.id) },
       { label: 'Invert Colors',      shortcut: 'Ctrl+I', action: () => s.invertActiveLayer() },
       { label: 'Remove Background (AI)', action: () => removeBackground(s) },
       { label: layer.isLocked ? 'Unlock Layer' : 'Lock Layer', action: () => s.setLayerLocked(layer.id, !layer.isLocked) },
@@ -519,7 +523,7 @@ export class LayersPanel {
       {
         label: s.selectedLayerIDs.size > 1 ? `Delete Selected Layers (${s.selectedLayerIDs.size})` : 'Delete Layer',
         shortcut: 'Del',
-        action: () => s.deleteSelectedLayers(),
+        action: () => promptDeleteLayers(s, layer.id),
         danger: true
       },
     ];

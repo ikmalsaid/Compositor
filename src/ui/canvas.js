@@ -6,9 +6,11 @@ import { Tool } from '../store/session.js';
 import { blendModeToCompositeOp } from '../store/document.js';
 import { LayerTransform } from '../store/document.js';
 import { RulerView } from './ruler.js';
-import { openTextEditor, closeTextEditor, renderTextToLayer, layerNameFromText } from './panels/textEditor.js';
+import { openTextEditor, closeTextEditor, renderTextToLayer, layerNameFromText, isTextEditorOpen, getActiveTextEditingLayer } from './panels/textEditor.js';
 import { showContextMenu, closeContextMenu } from './panels/contextMenu.js';
+import { promptDeleteLayers } from './panels/layerDialogs.js';
 import { removeBackground } from '../ai/backgroundRemoval.js';
+import { sampleGradient } from '../assets/gradientData.js';
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 32;
@@ -28,8 +30,8 @@ export class CanvasView {
     // Scrollbar elements
     this.sbH = document.getElementById('canvas-scrollbar-h');
     this.sbV = document.getElementById('canvas-scrollbar-v');
-    this.thumbH = this.sbH?.querySelector('.canvas-scrollbar-thumb');
-    this.thumbV = this.sbV?.querySelector('.canvas-scrollbar-thumb');
+    this.thumbH = this.sbH?.querySelector?.('.canvas-scrollbar-thumb') || null;
+    this.thumbV = this.sbV?.querySelector?.('.canvas-scrollbar-thumb') || null;
 
     // Ruler & Guides overlay
     this.rulerView = new RulerView(this, this._session);
@@ -86,6 +88,8 @@ export class CanvasView {
       this._session.off('change', this._sessionHandlers.change);
       this._session.off('tool-change', this._sessionHandlers.toolChange);
       this._session.off('selection-change', this._sessionHandlers.selChange);
+      this._session.off('text-editor-open', this._sessionHandlers.textOpen);
+      this._session.off('text-editor-close', this._sessionHandlers.textClose);
     }
     this._session = s;
     if (this.rulerView) this.rulerView.session = s;
@@ -98,12 +102,24 @@ export class CanvasView {
           this._markDirty();
         },
         selChange: () => this._onSelectionChange(),
+        textOpen: () => {
+          this._startAntsAnimation();
+          this._markDirty();
+        },
+        textClose: () => {
+          if (!this.session?.hasSelection || !this.session.hasSelection()) {
+            this._stopAntsAnimation();
+          }
+          this._markDirty();
+        },
       };
       s.on('canvas-dirty', this._sessionHandlers.dirty);
       s.on('change', this._sessionHandlers.change);
       s.on('tool-change', this._sessionHandlers.toolChange);
       s.on('selection-change', this._sessionHandlers.selChange);
-      if (s.hasSelection && s.hasSelection()) {
+      s.on('text-editor-open', this._sessionHandlers.textOpen);
+      s.on('text-editor-close', this._sessionHandlers.textClose);
+      if ((s.hasSelection && s.hasSelection()) || isTextEditorOpen() || this._liveTextBox) {
         this._startAntsAnimation();
       } else {
         this._stopAntsAnimation();
@@ -116,7 +132,7 @@ export class CanvasView {
   }
 
   _onSelectionChange() {
-    if (this.session?.hasSelection && this.session.hasSelection()) {
+    if ((this.session?.hasSelection && this.session.hasSelection()) || isTextEditorOpen() || this._liveTextBox) {
       this._startAntsAnimation();
     } else {
       this._stopAntsAnimation();
@@ -128,7 +144,11 @@ export class CanvasView {
     if (this._antsAnimId) return;
     let lastTime = performance.now();
     const loop = (now) => {
-      if (!this.session?.hasSelection || !this.session.hasSelection()) {
+      const hasSel = this.session?.hasSelection && this.session.hasSelection();
+      const isEditingText = isTextEditorOpen();
+      const isDraggingTextBox = !!this._liveTextBox;
+
+      if (!hasSel && !isEditingText && !isDraggingTextBox) {
         this._stopAntsAnimation();
         return;
       }
@@ -164,7 +184,7 @@ export class CanvasView {
   }
 
   _updateAreaTool() {
-    this.area.dataset.tool = this.session.tool;
+    if (this.area?.dataset) this.area.dataset.tool = this.session.tool;
   }
 
   // â”€â”€â”€ Rendering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -307,9 +327,25 @@ export class CanvasView {
       ctx.restore();
     }
 
-    // 1. Move Tool Transform Handles on Active Layer
-    if (tool === Tool.MOVE && this.session.activeLayer) {
-      this._drawTransformHandles(ctx, this.session.activeLayer);
+    // 1. Move & Cursor Tool Handles on Active Layer
+    if ((tool === Tool.MOVE || tool === Tool.CURSOR) && this.session.activeLayer) {
+      this._drawTransformHandles(ctx, this.session.activeLayer, tool === Tool.CURSOR);
+    }
+
+    // Cursor multi-layer marquee drag box
+    if (this._drag && this._drag.type === 'cursor-marquee') {
+      const minX = Math.min(this._drag.startDX, this._drag.currDX);
+      const minY = Math.min(this._drag.startDY, this._drag.currDY);
+      const mw = Math.abs(this._drag.currDX - this._drag.startDX);
+      const mh = Math.abs(this._drag.currDY - this._drag.startDY);
+      ctx.save();
+      ctx.fillStyle = 'rgba(79, 142, 247, 0.12)';
+      ctx.fillRect(minX, minY, mw, mh);
+      ctx.strokeStyle = '#4f8ef7';
+      ctx.lineWidth = 1 / this.scale;
+      ctx.setLineDash([4 / this.scale, 4 / this.scale]);
+      ctx.strokeRect(minX, minY, mw, mh);
+      ctx.restore();
     }
 
     // 2. Selection (Marquee, Lasso polygon, or Magic Wand)
@@ -393,14 +429,59 @@ export class CanvasView {
       this._drawLiveShape(ctx, this._liveShape);
     }
 
-    // 5. Live Gradient preview line
-    if (this._liveGrad) {
+    // 4b. Live Text Box preview (animated dotted lines)
+    if (this._liveTextBox) {
+      const tb = this._liveTextBox;
+      ctx.save();
+      ctx.fillStyle = 'rgba(79, 142, 247, 0.08)';
+      ctx.fillRect(tb.x, tb.y, tb.w, tb.h);
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 1.5 / this.scale;
+      ctx.strokeRect(tb.x, tb.y, tb.w, tb.h);
       ctx.strokeStyle = '#4f8ef7';
-      ctx.lineWidth = 2 / this.scale;
-      ctx.beginPath();
-      ctx.moveTo(this._liveGrad.x1, this._liveGrad.y1);
-      ctx.lineTo(this._liveGrad.x2, this._liveGrad.y2);
-      ctx.stroke();
+      ctx.lineWidth = 1.5 / this.scale;
+      ctx.setLineDash([4 / this.scale, 4 / this.scale]);
+      ctx.lineDashOffset = -this._marchingAntsOffset / this.scale;
+      ctx.strokeRect(tb.x, tb.y, tb.w, tb.h);
+      if (tb.w > 20 && tb.h > 20) {
+        this._drawBoxHandles(ctx, tb.x, tb.y, tb.w, tb.h);
+      }
+      ctx.restore();
+    }
+
+    // 4c. Active Text Layer editing bounding box (animated dotted lines)
+    if (isTextEditorOpen()) {
+      const editingLayer = getActiveTextEditingLayer() || this.session.activeLayer;
+      if (editingLayer && editingLayer.transform) {
+        const tx = editingLayer.transform.x;
+        const ty = editingLayer.transform.y;
+        const tw = Math.max(16, editingLayer.transform.w);
+        const th = Math.max(16, editingLayer.transform.h);
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(79, 142, 247, 0.06)';
+        ctx.fillRect(tx, ty, tw, th);
+
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1.5 / this.scale;
+        ctx.strokeRect(tx, ty, tw, th);
+
+        ctx.strokeStyle = '#4f8ef7';
+        ctx.lineWidth = 1.5 / this.scale;
+        ctx.setLineDash([4 / this.scale, 4 / this.scale]);
+        ctx.lineDashOffset = -this._marchingAntsOffset / this.scale;
+        ctx.strokeRect(tx, ty, tw, th);
+
+        if (tw > 20 && th > 20) {
+          this._drawBoxHandles(ctx, tx, ty, tw, th);
+        }
+        ctx.restore();
+      }
+    }
+
+    // 5. Live Gradient preview & interactive vector guide
+    if (this._liveGrad) {
+      this._renderLiveGradientPreview(ctx, doc);
     }
 
     // 6. Clone Source Marker
@@ -439,7 +520,7 @@ export class CanvasView {
     ctx.restore();
   }
 
-  _drawTransformHandles(ctx, layer) {
+  _drawTransformHandles(ctx, layer, isCursorOnly = false) {
     const t = layer.transform;
     ctx.save();
     const cx = t.cx, cy = t.cy;
@@ -450,6 +531,11 @@ export class CanvasView {
     ctx.strokeStyle = '#4f8ef7';
     ctx.lineWidth = 1.5 / this.scale;
     ctx.strokeRect(-hw, -hh, t.w, t.h);
+
+    if (isCursorOnly) {
+      ctx.restore();
+      return;
+    }
 
     // 8 resize handles
     const handleSize = 7 / this.scale;
@@ -813,9 +899,277 @@ export class CanvasView {
     ctx.restore();
   }
 
+  _renderLiveGradientPreview(ctx, doc) {
+    if (!this._liveGrad) return;
+    const { x1, y1, x2, y2, isSnapped } = this._liveGrad;
+    const dist = Math.hypot(x2 - x1, y2 - y1);
+    const invScale = 1 / this.scale;
+
+    // 1. Live Gradient Raster Preview (shows actual colors while dragging)
+    if (dist >= 3) {
+      ctx.save();
+
+      // Determine clipping: selection or active layer or doc
+      if (this.session.selectionPath && this.session.selectionPath.length > 2) {
+        ctx.beginPath();
+        const first = this.session.selectionPath[0];
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < this.session.selectionPath.length; i++) {
+          const pt = this.session.selectionPath[i];
+          ctx.lineTo(pt.x, pt.y);
+        }
+        ctx.closePath();
+        ctx.clip();
+      } else if (this.session.selectionRect) {
+        const sr = this.session.selectionRect;
+        ctx.beginPath();
+        ctx.rect(sr.x, sr.y, sr.w, sr.h);
+        ctx.clip();
+      } else {
+        const layer = this.session.activeLayer;
+        if (layer && !layer.isGroup && !layer.isLocked && layer.transform) {
+          ctx.beginPath();
+          ctx.rect(layer.transform.x, layer.transform.y, layer.transform.w, layer.transform.h);
+          ctx.clip();
+        } else {
+          ctx.beginPath();
+          ctx.rect(0, 0, doc.width, doc.height);
+          ctx.clip();
+        }
+      }
+
+      let g;
+      if (this.session.gradientType === 'radial') {
+        g = ctx.createRadialGradient(x1, y1, 0, x1, y1, Math.max(1, dist));
+      } else {
+        g = ctx.createLinearGradient(x1, y1, x2, y2);
+      }
+
+      const stops = this.session.gradientStops || [
+        { offset: 0, color: this.session.fgColor },
+        { offset: 1, color: this.session.bgColor },
+      ];
+
+      const stepsCount = this.session.gradientSteps || 0;
+      if (stepsCount >= 2) {
+        for (let i = 0; i < stepsCount; i++) {
+          const t0 = i / stepsCount;
+          const t1 = (i + 1) / stepsCount;
+          const col = sampleGradient(stops, (i + 0.5) / stepsCount);
+          const parsedCol = col === 'transparent' ? 'rgba(0,0,0,0)' : col;
+          g.addColorStop(Math.max(0, Math.min(1, t0)), parsedCol);
+          g.addColorStop(Math.max(0, Math.min(1, t1 - 0.0001)), parsedCol);
+        }
+      } else {
+        for (const stop of stops) {
+          const col = stop.color === 'transparent' ? 'rgba(0,0,0,0)' : stop.color;
+          g.addColorStop(Math.max(0, Math.min(1, stop.offset)), col);
+        }
+      }
+
+      ctx.globalAlpha = Math.max(0, Math.min(1, this.session.gradientOpacity ?? 1.0));
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, doc.width, doc.height);
+      ctx.restore();
+    }
+
+    // 2. High-Contrast Vector Guide Line with Start/End Handles & Stop Pins
+    ctx.save();
+
+    // Vector line shadow / outline
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.lineWidth = 3.5 * invScale;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // Vector line inner accent
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5 * invScale;
+    ctx.stroke();
+
+    const stops = this.session.gradientStops || [];
+    const cos = dist > 0 ? (x2 - x1) / dist : 1;
+    const sin = dist > 0 ? (y2 - y1) / dist : 0;
+    const perpX = -sin;
+    const perpY = cos;
+    const elasticScale = Math.min(1.4, Math.max(0.85, 0.85 + Math.sqrt(dist) * 0.022));
+
+    // Directional elastic chevrons along the shaft showing flow direction
+    if (dist >= 45 * invScale && stops.length <= 3) {
+      const chevronCount = dist >= 160 * invScale ? 3 : (dist >= 85 * invScale ? 2 : 1);
+      const chevronOffsets = chevronCount === 1 ? [0.5] : (chevronCount === 2 ? [0.35, 0.70] : [0.25, 0.50, 0.75]);
+      const cLen = 5.5 * invScale * elasticScale;
+      const cWing = 4.5 * invScale * elasticScale;
+
+      for (const t of chevronOffsets) {
+        const cx = x1 + (x2 - x1) * t;
+        const cy = y1 + (y2 - y1) * t;
+
+        ctx.beginPath();
+        ctx.moveTo(cx - cos * cLen + perpX * cWing, cy - sin * cLen + perpY * cWing);
+        ctx.lineTo(cx + cos * cLen, cy + sin * cLen);
+        ctx.lineTo(cx - cos * cLen - perpX * cWing, cy - sin * cLen - perpY * cWing);
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.lineWidth = 3 * invScale;
+        ctx.stroke();
+
+        ctx.strokeStyle = isSnapped ? '#ffcf33' : '#ffffff';
+        ctx.lineWidth = 1.4 * invScale;
+        ctx.stroke();
+      }
+    }
+
+    // Intermediate color stops along the line
+    if (dist >= 15 && stops.length > 2) {
+      for (let i = 1; i < stops.length - 1; i++) {
+        const stop = stops[i];
+        const sx = x1 + (x2 - x1) * stop.offset;
+        const sy = y1 + (y2 - y1) * stop.offset;
+        const pinR = 3.5 * invScale;
+
+        ctx.beginPath();
+        ctx.arc(sx, sy, pinR + 1 * invScale, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(sx, sy, pinR, 0, Math.PI * 2);
+        ctx.fillStyle = stop.color === 'transparent' ? 'rgba(255,255,255,0.4)' : stop.color;
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1 * invScale;
+        ctx.stroke();
+      }
+    }
+
+    // Start handle circle (at x1, y1)
+    const handleR = 5.5 * invScale;
+    ctx.beginPath();
+    ctx.arc(x1, y1, handleR + 1.5 * invScale, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(x1, y1, handleR, 0, Math.PI * 2);
+    const firstCol = stops[0]?.color;
+    ctx.fillStyle = firstCol === 'transparent' ? 'rgba(255,255,255,0.4)' : (firstCol || '#000000');
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5 * invScale;
+    ctx.stroke();
+
+    // End handle circle (at x2, y2)
+    ctx.beginPath();
+    ctx.arc(x2, y2, handleR + 1.5 * invScale, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(x2, y2, handleR, 0, Math.PI * 2);
+    const lastCol = stops[stops.length - 1]?.color;
+    ctx.fillStyle = lastCol === 'transparent' ? 'rgba(255,255,255,0.4)' : (lastCol || '#ffffff');
+    ctx.fill();
+    ctx.strokeStyle = isSnapped ? '#ffcf33' : '#4f8ef7';
+    ctx.lineWidth = 1.8 * invScale;
+    ctx.stroke();
+
+    // 3. Elastic Directional Arrowhead at the tip
+    if (dist >= 8) {
+      const headLen = 14 * invScale * elasticScale;
+      const wingW = 8 * invScale * elasticScale;
+
+      const tipX = x2 + cos * (headLen + 2 * invScale);
+      const tipY = y2 + sin * (headLen + 2 * invScale);
+      const wingLeftX = x2 - cos * (headLen * 0.15) + perpX * wingW;
+      const wingLeftY = y2 - sin * (headLen * 0.15) + perpY * wingW;
+      const wingRightX = x2 - cos * (headLen * 0.15) - perpX * wingW;
+      const wingRightY = y2 - sin * (headLen * 0.15) - perpY * wingW;
+      const notchX = x2 + cos * (headLen * 0.2);
+      const notchY = y2 + sin * (headLen * 0.2);
+
+      // Outer shadow & stroke
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(wingLeftX, wingLeftY);
+      ctx.lineTo(notchX, notchY);
+      ctx.lineTo(wingRightX, wingRightY);
+      ctx.closePath();
+
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+      ctx.lineWidth = 3.5 * invScale;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+
+      // Arrowhead body fill (vibrant accent or snapped gold)
+      ctx.fillStyle = isSnapped ? '#ffcf33' : '#4f8ef7';
+      ctx.fill();
+
+      // Arrowhead inner highlight stroke
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.4 * invScale;
+      ctx.stroke();
+    }
+
+    // Radial circle outline preview if radial type
+    if (this.session.gradientType === 'radial' && dist >= 4) {
+      ctx.beginPath();
+      ctx.arc(x1, y1, dist, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.lineWidth = 1 * invScale;
+      ctx.setLineDash([4 * invScale, 4 * invScale]);
+      ctx.stroke();
+    }
+
+    // Floating Angle & Length HUD badge (positioned cleanly perpendicular to arrow)
+    if (dist >= 8) {
+      let rawAngle = (Math.atan2(sin, cos) * 180 / Math.PI);
+      if (rawAngle < 0) rawAngle += 360;
+      const angleText = `${Math.round(rawAngle)}°`;
+      const lengthText = `${Math.round(dist)}px`;
+      const badgeText = isSnapped ? `${angleText} · ${lengthText} (45°)` : `${angleText} · ${lengthText}`;
+
+      ctx.font = `${Math.max(10, Math.round(11 * invScale))}px system-ui, -apple-system, sans-serif`;
+      const textW = ctx.measureText(badgeText).width;
+      const padX = 6 * invScale;
+      const padY = 3 * invScale;
+      const boxW = textW + padX * 2;
+      const boxH = 18 * invScale;
+
+      // Position perpendicular to the arrow direction so it never collides with arrowhead
+      const badgeOffset = 22 * invScale;
+      const perpSign = perpY >= 0 ? 1 : -1;
+      const boxX = x2 + perpX * badgeOffset * perpSign - boxW / 2;
+      const boxY = y2 + perpY * badgeOffset * perpSign - boxH / 2;
+
+      // Dark rounded pill background
+      ctx.fillStyle = 'rgba(18, 18, 24, 0.88)';
+      ctx.strokeStyle = isSnapped ? 'rgba(255, 207, 51, 0.7)' : 'rgba(255, 255, 255, 0.25)';
+      ctx.lineWidth = 1 * invScale;
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(boxX, boxY, boxW, boxH, 4 * invScale);
+      } else {
+        ctx.rect(boxX, boxY, boxW, boxH);
+      }
+      ctx.fill();
+      ctx.stroke();
+
+      // Text inside pill
+      ctx.fillStyle = isSnapped ? '#ffcf33' : '#ffffff';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(badgeText, boxX + padX, boxY + boxH / 2);
+    }
+
+    ctx.restore();
+  }
+
   // â”€â”€â”€ Resize & Scrollbars â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   _initResizeObserver() {
+    if (typeof ResizeObserver === 'undefined') return;
     this._resizeObs = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const newW = entry.contentRect.width;
@@ -1091,22 +1445,24 @@ export class CanvasView {
         this.session.activeLayerID = hitText.id;
         this.session.selectedLayerIDs = new Set([hitText.id]);
         this.session.beginEdit('Edit Text');
-        const targetDocX = hitText.textData.localX !== undefined
-          ? (hitText.transform.x + hitText.textData.localX)
-          : (hitText.textData.docX ?? hitText.transform.x);
-        const targetDocY = hitText.textData.localY !== undefined
-          ? (hitText.transform.y + hitText.textData.localY)
-          : (hitText.textData.docY ?? hitText.transform.y);
+        const targetDocX = hitText.transform.x;
+        const targetDocY = hitText.transform.y;
 
         openTextEditor(
           this.session, hitText, targetDocX, targetDocY,
           hitText.textData,
-          () => { hitText.markChanged(); this.session.endEdit(); this.session._emit('canvas-dirty'); },
+          () => {
+            hitText.markChanged();
+            this.session.endEdit();
+            this.session.setTool(Tool.MOVE);
+            this.session._emit('canvas-dirty');
+          },
           () => {
             this.session.endEdit();
             renderTextToLayer(hitText, targetDocX, targetDocY, hitText.textData);
             this.session._emit('canvas-dirty');
-          }
+          },
+          { initialBoxW: hitText.transform.w, initialBoxH: hitText.transform.h }
         );
       }
     });
@@ -1130,11 +1486,25 @@ export class CanvasView {
         this._isSpaceDown = true;
         this.area.classList.add('panning');
       }
+      if (e.key === 'Escape' && this._drag?.type === 'gradient') {
+        this._liveGrad = null;
+        this._drag = null;
+        this._endDrag();
+        this._markDirty();
+      }
+      if (e.key === 'Shift' && this._drag?.type === 'gradient' && this._cursorDocPos) {
+        this._updateGradientDrag(this._cursorDocPos.x, this._cursorDocPos.y, true);
+        this._markDirty();
+      }
     });
     window.addEventListener('keyup', (e) => {
       if (e.code === 'Space') {
         this._isSpaceDown = false;
         if (!this._drag || this._drag.type !== 'pan') this.area.classList.remove('panning');
+      }
+      if (e.key === 'Shift' && this._drag?.type === 'gradient' && this._cursorDocPos) {
+        this._updateGradientDrag(this._cursorDocPos.x, this._cursorDocPos.y, false);
+        this._markDirty();
       }
     });
   }
@@ -1177,6 +1547,56 @@ export class CanvasView {
         const hex = '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
         this.session.setFgColor(hex);
       }
+      return;
+    }
+
+    // Cursor tool (Selection & neutral interaction)
+    if (tool === Tool.CURSOR) {
+      const active = this.session.activeLayer;
+
+      // 1. If clicked on active layer body
+      if (active && !active.isLocked && !active.isGroup && active.transform.contains(dx, dy)) {
+        this.session.beginEdit('Move Layer');
+        this._drag = {
+          type: 'move',
+          layerID: active.id,
+          startDX: dx,
+          startDY: dy,
+          origX: active.transform.x,
+          origY: active.transform.y,
+        };
+        return;
+      }
+
+      // 2. Hit-test topmost visible, unlocked layer
+      const hit = [...doc.layers].reverse().find(l => l.isVisible && !l.isLocked && !l.isGroup && l.transform.contains(dx, dy));
+      if (hit) {
+        this.session.selectLayer(hit.id, { isToggle: e.ctrlKey || e.metaKey, isRange: e.shiftKey });
+        this.session.beginEdit('Move Layer');
+        this._drag = {
+          type: 'move',
+          layerID: hit.id,
+          startDX: dx, startDY: dy,
+          origX: hit.transform.x,
+          origY: hit.transform.y,
+        };
+        return;
+      }
+
+      // 3. Clicked empty space -> start marquee multi-selection
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        this.session.selectedLayerIDs.clear();
+        this.session.activeLayerID = null;
+        this.session._emit('change');
+        this.session._emit('canvas-dirty');
+      }
+      this._drag = {
+        type: 'cursor-marquee',
+        startDX: dx,
+        startDY: dy,
+        currDX: dx,
+        currDY: dy,
+      };
       return;
     }
 
@@ -1363,7 +1783,7 @@ export class CanvasView {
     // Gradient tool
     if (tool === Tool.GRADIENT) {
       this._drag = { type: 'gradient', startDX: dx, startDY: dy };
-      this._liveGrad = { x1: dx, y1: dy, x2: dx, y2: dy };
+      this._liveGrad = { x1: dx, y1: dy, x2: dx, y2: dy, isSnapped: false };
       return;
     }
 
@@ -1373,7 +1793,7 @@ export class CanvasView {
       return;
     }
 
-    // Text tool — floating editor panel
+    // Text tool — wait for user to select & drag bounding box with crosshair, then create text layer
     if (tool === Tool.TEXT) {
       const layers = this.session.document?.layers ?? [];
 
@@ -1383,48 +1803,37 @@ export class CanvasView {
       );
 
       if (hitText) {
+        this.session.activeLayerID = hitText.id;
+        this.session.selectedLayerIDs = new Set([hitText.id]);
         this.session.beginEdit('Edit Text');
-        const targetDocX = hitText.textData.localX !== undefined
-          ? (hitText.transform.x + hitText.textData.localX)
-          : (hitText.textData.docX ?? hitText.transform.x);
-        const targetDocY = hitText.textData.localY !== undefined
-          ? (hitText.transform.y + hitText.textData.localY)
-          : (hitText.textData.docY ?? hitText.transform.y);
+        const targetDocX = hitText.transform.x;
+        const targetDocY = hitText.transform.y;
 
         openTextEditor(
           this.session, hitText, targetDocX, targetDocY,
           hitText.textData,
-          () => { hitText.markChanged(); this.session.endEdit(); this.session._emit('canvas-dirty'); },
+          () => {
+            hitText.markChanged();
+            this.session.endEdit();
+            this.session.setTool(Tool.MOVE);
+            this.session._emit('canvas-dirty');
+          },
           () => {
             // Cancel edit — restore previous render
             this.session.endEdit();
             renderTextToLayer(hitText, targetDocX, targetDocY, hitText.textData);
             this.session._emit('canvas-dirty');
-          }
+          },
+          { initialBoxW: hitText.transform.w, initialBoxH: hitText.transform.h }
         );
         return;
       }
 
-      // New text placement — create compact layer immediately with auto-naming, open floating editor
-      const defaultFontSize = Math.max(12, Math.round(this.session.fontSize || 48));
-      const initW = Math.max(48, Math.round(defaultFontSize * 2));
-      const initH = Math.max(24, Math.round(defaultFontSize * 1.4));
-      const textLayer = this.session.addBlankLayer(this.session.getNextLayerName('Text'), {
-        x: Math.round(dx),
-        y: Math.round(dy),
-        w: initW,
-        h: initH,
-      });
-      this.session.beginEdit('Add Text');
-      openTextEditor(
-        this.session, textLayer, dx, dy, null,
-        () => { textLayer.markChanged(); this.session.endEdit(); this.session._emit('canvas-dirty'); },
-        () => {
-          // Cancel — roll back layer creation via undo
-          this.session.endEdit();
-          this.session.undo();
-        }
-      );
+      // Start drag to determine area and size for the new text box
+      this._drag = { type: 'textbox', startDX: dx, startDY: dy, startClientX: e.clientX, startClientY: e.clientY };
+      this._liveTextBox = { x: dx, y: dy, w: 0, h: 0 };
+      this._startAntsAnimation();
+      this._markDirty();
       return;
     }
 
@@ -1686,6 +2095,13 @@ export class CanvasView {
       return;
     }
 
+    if (this._drag.type === 'cursor-marquee') {
+      this._drag.currDX = dx;
+      this._drag.currDY = dy;
+      this._dirty = true;
+      return;
+    }
+
     if (this._drag.type === 'marquee') {
       const minX = Math.min(this._drag.startDX, dx);
       const minY = Math.min(this._drag.startDY, dy);
@@ -1767,7 +2183,16 @@ export class CanvasView {
     }
 
     if (this._drag.type === 'gradient') {
-      this._liveGrad = { x1: this._drag.startDX, y1: this._drag.startDY, x2: dx, y2: dy };
+      this._updateGradientDrag(dx, dy, e.shiftKey);
+      this._markDirty();
+      return;
+    }
+
+    if (this._drag.type === 'textbox') {
+      const sx = this._drag.startDX, sy = this._drag.startDY;
+      const minX = Math.min(sx, dx), minY = Math.min(sy, dy);
+      const w = Math.abs(dx - sx), h = Math.abs(dy - sy);
+      this._liveTextBox = { x: minX, y: minY, w, h };
       this._markDirty();
       return;
     }
@@ -1823,6 +2248,31 @@ export class CanvasView {
   _onPointerUp(e) {
     if (!this._drag) return;
 
+    if (this._drag.type === 'cursor-marquee') {
+      const doc = this.session.document;
+      const minX = Math.min(this._drag.startDX, this._drag.currDX);
+      const minY = Math.min(this._drag.startDY, this._drag.currDY);
+      const mw = Math.abs(this._drag.currDX - this._drag.startDX);
+      const mh = Math.abs(this._drag.currDY - this._drag.startDY);
+
+      if (mw > 4 && mh > 4 && doc) {
+        for (const l of doc.layers) {
+          if (!l.isVisible || l.isLocked || l.isGroup) continue;
+          const lt = l.transform;
+          if (lt.x < minX + mw && lt.x + lt.w > minX && lt.y < minY + mh && lt.y + lt.h > minY) {
+            this.session.selectedLayerIDs.add(l.id);
+            this.session.activeLayerID = l.id;
+          }
+        }
+        this.session._emit('change');
+        this.session._emit('canvas-dirty');
+      }
+      this._drag = null;
+      this._dirty = true;
+      this._render();
+      return;
+    }
+
     if (this._drag.type === 'move' || this._drag.type === 'resize' || this._drag.type === 'rotate') {
       this.session.endEdit();
     }
@@ -1851,6 +2301,49 @@ export class CanvasView {
     if (this._drag.type === 'shape' && this._liveShape) {
       this._commitShape(this._liveShape);
       this._liveShape = null;
+      this.session.setTool(Tool.CURSOR);
+    }
+
+    if (this._drag.type === 'textbox' && this._liveTextBox) {
+      const tb = this._liveTextBox;
+      let boxX = Math.round(tb.x);
+      let boxY = Math.round(tb.y);
+      let boxW = Math.round(tb.w);
+      let boxH = Math.round(tb.h);
+      this._liveTextBox = null;
+
+      const defaultFontSize = Math.max(12, Math.round(this.session.fontSize || 48));
+      if (boxW < 12 || boxH < 12) {
+        // Single click without dragging — provide default textbox area starting at click location
+        boxW = Math.max(180, Math.round(defaultFontSize * 4));
+        boxH = Math.max(48, Math.round(defaultFontSize * 1.5));
+      }
+
+      const textLayer = this.session.addBlankLayer(this.session.getNextLayerName('Text'), {
+        x: boxX,
+        y: boxY,
+        w: boxW,
+        h: boxH,
+      });
+      this.session.beginEdit('Add Text');
+      openTextEditor(
+        this.session, textLayer, boxX, boxY, null,
+        () => {
+          textLayer.markChanged();
+          this.session.endEdit();
+          this.session.setTool(Tool.CURSOR);
+          this.session._emit('canvas-dirty');
+        },
+        () => {
+          // Cancel — roll back layer creation via undo
+          this.session.endEdit();
+          this.session.undo();
+        },
+        { initialBoxW: boxW, initialBoxH: boxH }
+      );
+      this._endDrag();
+      this._markDirty();
+      return;
     }
 
     if (this._drag.type === 'gradient' && this._liveGrad) {
@@ -1867,6 +2360,7 @@ export class CanvasView {
       this.area.classList.remove('panning');
     }
     this._drag = null;
+    this._liveTextBox = null;
     this._activeSnapLines = null;
     this._isAngleSnapped = false;
     if (this.hud) this.hud.style.display = 'none';
@@ -1882,7 +2376,7 @@ export class CanvasView {
     const hardness = this.session.brushHardness;
 
     if (tool === Tool.BLUR) {
-      // Blur tool: direct pixel manipulation (no stroke buffer needed)
+      // Blur tool: optimized fast sub-region canvas blur
       const ctx = layer.ctx;
       if (!ctx) return;
       ctx.save();
@@ -1894,25 +2388,23 @@ export class CanvasView {
         const by = Math.max(0, Math.round(py - r));
         const bw = Math.min(layer.pixelW - bx, Math.round(r * 2));
         const bh = Math.min(layer.pixelH - by, Math.round(r * 2));
-        if (bw > 0 && bh > 0) {
-          const imgData = ctx.getImageData(bx, by, bw, bh);
-          const d = imgData.data;
-          for (let y = 1; y < bh - 1; y++) {
-            for (let x = 1; x < bw - 1; x++) {
-              const idx = (y * bw + x) * 4;
-              if (d[idx + 3] > 0) {
-                let sumR = 0, sumG = 0, sumB = 0, cnt = 0;
-                for (let dy = -1; dy <= 1; dy++) {
-                  for (let dx = -1; dx <= 1; dx++) {
-                    const sidx = ((y + dy) * bw + (x + dx)) * 4;
-                    sumR += d[sidx]; sumG += d[sidx + 1]; sumB += d[sidx + 2]; cnt++;
-                  }
-                }
-                d[idx] = sumR / cnt; d[idx + 1] = sumG / cnt; d[idx + 2] = sumB / cnt;
-              }
+        if (bw > 2 && bh > 2) {
+          if (typeof document !== 'undefined') {
+            const offCanvas = document.createElement('canvas');
+            offCanvas.width = bw;
+            offCanvas.height = bh;
+            const offCtx = offCanvas.getContext('2d');
+            if (offCtx && layer.canvas) {
+              offCtx.filter = `blur(${Math.max(1, Math.round(r * 0.25))}px)`;
+              offCtx.drawImage(layer.canvas, bx, by, bw, bh, 0, 0, bw, bh);
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(px, py, r, 0, Math.PI * 2);
+              ctx.clip();
+              ctx.drawImage(offCanvas, bx, by);
+              ctx.restore();
             }
           }
-          ctx.putImageData(imgData, bx, by);
         }
       }
       ctx.restore();
@@ -1990,22 +2482,41 @@ export class CanvasView {
     ctx.restore();
   }
 
-  /** Convert hex color like #RRGGBB to "R,G,B" string for rgba() */
-  /** Convert hex color like #RRGGBB to "R,G,B" string for rgba() */
+  /** Convert hex color like #RRGGBB or #RGB to "R,G,B" string for rgba() */
   _hexToRgb(hex) {
-    const h = hex.replace('#', '');
-    const r = parseInt(h.substring(0, 2), 16) || 0;
-    const g = parseInt(h.substring(2, 4), 16) || 0;
-    const b = parseInt(h.substring(4, 6), 16) || 0;
-    return `${r},${g},${b}`;
+    return this._hexToRgbArray(hex).join(',');
   }
 
-  _hexToRgbArray(hex) {
-    const h = hex.replace('#', '');
-    const r = parseInt(h.substring(0, 2), 16) || 0;
-    const g = parseInt(h.substring(2, 4), 16) || 0;
-    const b = parseInt(h.substring(4, 6), 16) || 0;
-    return [r, g, b];
+  _hexToRgbArray(color) {
+    if (!color) return [0, 0, 0];
+    if (Array.isArray(color)) return [color[0] || 0, color[1] || 0, color[2] || 0];
+    const s = String(color).trim().toLowerCase();
+    if (s.startsWith('rgb')) {
+      const nums = s.match(/[\d.]+/g);
+      if (nums && nums.length >= 3) {
+        return [
+          Math.max(0, Math.min(255, Math.round(Number(nums[0])))),
+          Math.max(0, Math.min(255, Math.round(Number(nums[1])))),
+          Math.max(0, Math.min(255, Math.round(Number(nums[2])))),
+        ];
+      }
+    }
+    const h = s.replace('#', '');
+    if (h.length === 3 || h.length === 4) {
+      return [
+        parseInt(h[0] + h[0], 16) || 0,
+        parseInt(h[1] + h[1], 16) || 0,
+        parseInt(h[2] + h[2], 16) || 0,
+      ];
+    }
+    if (h.length >= 6) {
+      return [
+        parseInt(h.substring(0, 2), 16) || 0,
+        parseInt(h.substring(2, 4), 16) || 0,
+        parseInt(h.substring(4, 6), 16) || 0,
+      ];
+    }
+    return [0, 0, 0];
   }
 
   // ─── Bucket Fill Tool Engine ──────────────────────────────────────────────
@@ -2015,15 +2526,89 @@ export class CanvasView {
     if (!doc) return;
 
     let layer = this.session.activeLayer;
-    if (!layer || layer.isGroup || layer.isLocked) {
-      layer = this.session.addBlankLayer(this.session.getNextLayerName('Bucket Fill'), { fullCanvas: true });
+
+    // Check if active layer is valid and contains click point
+    const activeValid = layer && !layer.isGroup && !layer.isLocked && layer.transform.contains(dx, dy);
+
+    if (!activeValid) {
+      // Find topmost visible, unlocked layer under cursor
+      const hit = [...(doc.layers || [])].reverse().find(l =>
+        l.isVisible && !l.isLocked && !l.isGroup && l.transform.contains(dx, dy)
+      );
+      if (hit) {
+        layer = hit;
+        this.session.setActiveLayer(hit.id);
+      } else if (!layer || layer.isGroup || layer.isLocked) {
+        layer = this.session.addBlankLayer(this.session.getNextLayerName('Bucket Fill'), { fullCanvas: true });
+      }
     }
 
+    if (!layer || layer.isGroup || layer.isLocked) return;
+
     const t = layer.transform;
-    const lx = Math.floor((dx - t.x) * (layer.pixelW / t.w));
-    const ly = Math.floor((dy - t.y) * (layer.pixelH / t.h));
+    const rad = -t.rotation * Math.PI / 180;
+    const odx = dx - t.cx;
+    const ody = dy - t.cy;
+    let rx = odx * Math.cos(rad) - ody * Math.sin(rad);
+    let ry = odx * Math.sin(rad) + ody * Math.cos(rad);
+    if (t.flipX) rx = -rx;
+    if (t.flipY) ry = -ry;
+
+    const lx = Math.floor((rx + t.w / 2) * (layer.pixelW / t.w));
+    const ly = Math.floor((ry + t.h / 2) * (layer.pixelH / t.h));
 
     if (lx < 0 || lx >= layer.pixelW || ly < 0 || ly >= layer.pixelH) return;
+
+    const layerToDocPx = (px, py) => {
+      if (t.rotation === 0 && !t.flipX && !t.flipY) {
+        return [
+          Math.floor(t.x + (px * t.w / layer.pixelW)),
+          Math.floor(t.y + (py * t.h / layer.pixelH))
+        ];
+      }
+      let normX = (px / layer.pixelW) - 0.5;
+      let normY = (py / layer.pixelH) - 0.5;
+      if (t.flipX) normX = -normX;
+      if (t.flipY) normY = -normY;
+      const unrotX = normX * t.w;
+      const unrotY = normY * t.h;
+      const cos = Math.cos(t.rotation * Math.PI / 180);
+      const sin = Math.sin(t.rotation * Math.PI / 180);
+      return [
+        Math.floor(t.cx + unrotX * cos - unrotY * sin),
+        Math.floor(t.cy + unrotX * sin + unrotY * cos)
+      ];
+    };
+
+    // Selection bounds check
+    const sel = this.session.selectionRect;
+    const selPath = this.session.selectionPath;
+    let minLX = 0, maxLX = layer.pixelW - 1, minLY = 0, maxLY = layer.pixelH - 1;
+    if (sel) {
+      minLX = Math.max(0, Math.floor((sel.x - t.x) * (layer.pixelW / t.w)));
+      maxLX = Math.min(layer.pixelW - 1, Math.ceil((sel.x + sel.w - t.x) * (layer.pixelW / t.w)));
+      minLY = Math.max(0, Math.floor((sel.y - t.y) * (layer.pixelH / t.h)));
+      maxLY = Math.min(layer.pixelH - 1, Math.ceil((sel.y + sel.h - t.y) * (layer.pixelH / t.h)));
+    }
+
+    const isInsideSelection = (px, py) => {
+      if (px < minLX || px > maxLX || py < minLY || py > maxLY) return false;
+      if (selPath && selPath.length > 2) {
+        const [docX, docY] = layerToDocPx(px, py);
+        let inside = false;
+        for (let i = 0, j = selPath.length - 1; i < selPath.length; j = i++) {
+          const xi = selPath[i].x, yi = selPath[i].y;
+          const xj = selPath[j].x, yj = selPath[j].y;
+          const intersect = ((yi > docY) !== (yj > docY)) &&
+            (docX < (xj - xi) * (docY - yi) / (yj - yi) + xi);
+          if (intersect) inside = !inside;
+        }
+        return inside;
+      }
+      return true;
+    };
+
+    if (!isInsideSelection(lx, ly)) return;
 
     this.session.beginEdit('Paint Bucket Fill');
 
@@ -2067,37 +2652,32 @@ export class CanvasView {
     // Target fill color
     const hex = this.session.fgColor;
     const [fillR, fillG, fillB] = this._hexToRgbArray(hex);
-    const fillA = Math.round(this.session.brushOpacity * 255);
+    const fillA = Math.round((this.session.bucketOpacity ?? 1.0) * 255);
 
     const tolerance = Math.max(0, Math.min(255, this.session.bucketTolerance ?? 32));
 
     const colorDist = (r, g, b, a) => {
-      return Math.max(
-        Math.abs(r - targetR),
-        Math.abs(g - targetG),
-        Math.abs(b - targetB),
-        Math.abs(a - targetA)
-      );
+      // Both fully transparent -> identical color
+      if (targetA === 0 && a === 0) return 0;
+      // One transparent and one opaque
+      if (targetA === 0) return a;
+      if (a === 0) return targetA;
+
+      const dr = r - targetR;
+      const dg = g - targetG;
+      const db = b - targetB;
+      const da = a - targetA;
+
+      // Euclidean distance in RGB normalized, combined with alpha difference
+      const rgbDist = Math.hypot(dr, dg, db) * 0.577350269;
+      return Math.max(rgbDist, Math.abs(da));
     };
 
-    // If start color already equals fill color within tolerance and sampling active layer only, no-op
-    if (colorDist(fillR, fillG, fillB, fillA) === 0 && !this.session.bucketSampleAll) {
+    // If target fill color is already identical to the seed pixel, no-op
+    if (fillR === targetR && fillG === targetG && fillB === targetB && fillA === targetA &&
+        (!this.session.bucketSampleAll || layerData[(ly * pw + lx) * 4] === fillR)) {
       this.session.endEdit();
       return;
-    }
-
-    // Selection bounds check
-    const sel = this.session.selectionRect;
-    let minLX = 0, maxLX = pw - 1, minLY = 0, maxLY = ph - 1;
-    if (sel) {
-      minLX = Math.max(0, Math.floor((sel.x - t.x) * (pw / t.w)));
-      maxLX = Math.min(pw - 1, Math.ceil((sel.x + sel.w - t.x) * (pw / t.w)));
-      minLY = Math.max(0, Math.floor((sel.y - t.y) * (ph / t.h)));
-      maxLY = Math.min(ph - 1, Math.ceil((sel.y + sel.h - t.y) * (ph / t.h)));
-      if (lx < minLX || lx > maxLX || ly < minLY || ly > maxLY) {
-        this.session.endEdit();
-        return;
-      }
     }
 
     const contiguous = this.session.bucketContiguous !== false;
@@ -2106,11 +2686,11 @@ export class CanvasView {
       // Non-contiguous: replace all matching pixels across layer/selection
       for (let y = minLY; y <= maxLY; y++) {
         for (let x = minLX; x <= maxLX; x++) {
+          if (!isInsideSelection(x, y)) continue;
           const lIdx = (y * pw + x) * 4;
           let sR = layerData[lIdx], sG = layerData[lIdx + 1], sB = layerData[lIdx + 2], sA = layerData[lIdx + 3];
           if (this.session.bucketSampleAll) {
-            const docPxX = Math.floor(t.x + (x * t.w / pw));
-            const docPxY = Math.floor(t.y + (y * t.h / ph));
+            const [docPxX, docPxY] = layerToDocPx(x, y);
             if (docPxX >= 0 && docPxX < sampleW && docPxY >= 0 && docPxY < sampleH) {
               const sIdx = (docPxY * sampleW + docPxX) * 4;
               sR = sampleData[sIdx]; sG = sampleData[sIdx + 1]; sB = sampleData[sIdx + 2]; sA = sampleData[sIdx + 3];
@@ -2148,7 +2728,7 @@ export class CanvasView {
         ];
 
         for (const [nx, ny] of neighbors) {
-          if (nx < minLX || nx > maxLX || ny < minLY || ny > maxLY) continue;
+          if (!isInsideSelection(nx, ny)) continue;
           const nVisitedIdx = ny * pw + nx;
           if (visited[nVisitedIdx]) continue;
           visited[nVisitedIdx] = 1;
@@ -2159,8 +2739,7 @@ export class CanvasView {
           let sA = layerData[(ny * pw + nx) * 4 + 3];
 
           if (this.session.bucketSampleAll) {
-            const docPxX = Math.floor(t.x + (nx * t.w / pw));
-            const docPxY = Math.floor(t.y + (ny * t.h / ph));
+            const [docPxX, docPxY] = layerToDocPx(nx, ny);
             if (docPxX >= 0 && docPxX < sampleW && docPxY >= 0 && docPxY < sampleH) {
               const sIdx = (docPxY * sampleW + docPxX) * 4;
               sR = sampleData[sIdx]; sG = sampleData[sIdx + 1]; sB = sampleData[sIdx + 2]; sA = sampleData[sIdx + 3];
@@ -2508,7 +3087,45 @@ export class CanvasView {
     this.session.endEdit();
   }
 
+  _updateGradientDrag(dx, dy, isShift) {
+    if (!this._drag || this._drag.type !== 'gradient') return;
+    const sx = this._drag.startDX;
+    const sy = this._drag.startDY;
+    let curX = dx;
+    let curY = dy;
+    let isSnapped = false;
+
+    if (isShift) {
+      const deltaX = curX - sx;
+      const deltaY = curY - sy;
+      const dist = Math.hypot(deltaX, deltaY);
+      if (dist > 2) {
+        const angleRad = Math.atan2(deltaY, deltaX);
+        const angleDeg = angleRad * (180 / Math.PI);
+        const snappedDeg = Math.round(angleDeg / 45) * 45;
+        const snappedRad = snappedDeg * (Math.PI / 180);
+        curX = sx + dist * Math.cos(snappedRad);
+        curY = sy + dist * Math.sin(snappedRad);
+        isSnapped = true;
+      }
+    }
+
+    this._liveGrad = {
+      x1: sx,
+      y1: sy,
+      x2: curX,
+      y2: curY,
+      isSnapped,
+    };
+  }
+
   _commitGradient(grad) {
+    const dist = Math.hypot(grad.x2 - grad.x1, grad.y2 - grad.y1);
+    if (dist < 6) {
+      // Ignore accidental click or degenerate micro-drag to prevent sudden harsh color split
+      return;
+    }
+
     let layer = this.session.activeLayer;
     if (!layer || layer.isGroup || layer.isLocked) {
       layer = this.session.addBlankLayer(this.session.getNextLayerName('Gradient'), { fullCanvas: true });
@@ -2525,6 +3142,28 @@ export class CanvasView {
     const lx2 = (grad.x2 - layer.transform.x) * scaleX;
     const ly2 = (grad.y2 - layer.transform.y) * scaleY;
 
+    // Clip to selection if active
+    if (this.session.selectionPath && this.session.selectionPath.length > 2) {
+      ctx.beginPath();
+      const first = this.session.selectionPath[0];
+      ctx.moveTo((first.x - layer.transform.x) * scaleX, (first.y - layer.transform.y) * scaleY);
+      for (let i = 1; i < this.session.selectionPath.length; i++) {
+        const pt = this.session.selectionPath[i];
+        ctx.lineTo((pt.x - layer.transform.x) * scaleX, (pt.y - layer.transform.y) * scaleY);
+      }
+      ctx.closePath();
+      ctx.clip();
+    } else if (this.session.selectionRect) {
+      const sr = this.session.selectionRect;
+      const rx = (sr.x - layer.transform.x) * scaleX;
+      const ry = (sr.y - layer.transform.y) * scaleY;
+      const rw = sr.w * scaleX;
+      const rh = sr.h * scaleY;
+      ctx.beginPath();
+      ctx.rect(rx, ry, rw, rh);
+      ctx.clip();
+    }
+
     let g;
     if (this.session.gradientType === 'radial') {
       const r = Math.hypot(lx2 - lx1, ly2 - ly1);
@@ -2533,9 +3172,29 @@ export class CanvasView {
       g = ctx.createLinearGradient(lx1, ly1, lx2, ly2);
     }
 
-    g.addColorStop(0, this.session.fgColor);
-    g.addColorStop(1, this.session.bgColor);
+    const stops = this.session.gradientStops || [
+      { offset: 0, color: this.session.fgColor },
+      { offset: 1, color: this.session.bgColor },
+    ];
 
+    const stepsCount = this.session.gradientSteps || 0;
+    if (stepsCount >= 2) {
+      for (let i = 0; i < stepsCount; i++) {
+        const t0 = i / stepsCount;
+        const t1 = (i + 1) / stepsCount;
+        const col = sampleGradient(stops, (i + 0.5) / stepsCount);
+        const parsedCol = col === 'transparent' ? 'rgba(0,0,0,0)' : col;
+        g.addColorStop(Math.max(0, Math.min(1, t0)), parsedCol);
+        g.addColorStop(Math.max(0, Math.min(1, t1 - 0.0001)), parsedCol);
+      }
+    } else {
+      for (const stop of stops) {
+        const col = stop.color === 'transparent' ? 'rgba(0,0,0,0)' : stop.color;
+        g.addColorStop(Math.max(0, Math.min(1, stop.offset)), col);
+      }
+    }
+
+    ctx.globalAlpha = Math.max(0, Math.min(1, this.session.gradientOpacity ?? 1.0));
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, layer.pixelW, layer.pixelH);
 
@@ -2691,8 +3350,7 @@ export class CanvasView {
         label: 'Delete Layer',
         shortcut: 'Del',
         danger: true,
-        disabled: layer.isLocked,
-        action: () => s.deleteLayer(layer.id),
+        action: () => promptDeleteLayers(s, layer.id),
       },
       { separator: true },
       {
@@ -2727,22 +3385,24 @@ export class CanvasView {
           label: 'Edit Text…',
           action: () => {
             s.beginEdit('Edit Text');
-            const targetDocX = layer.textData.localX !== undefined
-              ? (layer.transform.x + layer.textData.localX)
-              : (layer.textData.docX ?? layer.transform.x);
-            const targetDocY = layer.textData.localY !== undefined
-              ? (layer.transform.y + layer.textData.localY)
-              : (layer.textData.docY ?? layer.transform.y);
+            const targetDocX = layer.transform.x;
+            const targetDocY = layer.transform.y;
 
             openTextEditor(
               s, layer, targetDocX, targetDocY,
               layer.textData,
-              () => { layer.markChanged(); s.endEdit(); s._emit('canvas-dirty'); },
+              () => {
+                layer.markChanged();
+                s.endEdit();
+                s.setTool(Tool.MOVE);
+                s._emit('canvas-dirty');
+              },
               () => {
                 s.endEdit();
                 renderTextToLayer(layer, targetDocX, targetDocY, layer.textData);
                 s._emit('canvas-dirty');
-              }
+              },
+              { initialBoxW: layer.transform.w, initialBoxH: layer.transform.h }
             );
           }
         },
@@ -2777,6 +3437,14 @@ export class CanvasView {
       {
         label: 'Flip Vertical',
         action: () => s.flipLayerV(layer.id),
+      },
+      {
+        label: 'Mirror Horizontal (Duplicate)',
+        action: () => s.mirrorLayerH(layer.id),
+      },
+      {
+        label: 'Mirror Vertical (Duplicate)',
+        action: () => s.mirrorLayerV(layer.id),
       },
       {
         label: 'Invert Colors',
@@ -2820,22 +3488,40 @@ export class CanvasView {
         label: 'New Text Layer',
         action: () => {
           const defaultFontSize = Math.max(12, Math.round(s.fontSize || 48));
+          const boxW = Math.max(180, Math.round(defaultFontSize * 4));
+          const boxH = Math.max(48, Math.round(defaultFontSize * 1.5));
           const textLayer = s.addBlankLayer(s.getNextLayerName('Text'), {
             x: Math.round(docX),
             y: Math.round(docY),
-            w: Math.max(48, Math.round(defaultFontSize * 2)),
-            h: Math.max(24, Math.round(defaultFontSize * 1.4)),
+            w: boxW,
+            h: boxH,
           });
           s.beginEdit('Add Text');
           openTextEditor(
             s, textLayer, docX, docY, null,
-            () => { textLayer.markChanged(); s.endEdit(); s._emit('canvas-dirty'); },
+            () => {
+              textLayer.markChanged();
+              s.endEdit();
+              s.setTool(Tool.CURSOR);
+              s._emit('canvas-dirty');
+            },
             () => {
               s.endEdit();
               s.undo();
-            }
+            },
+            { initialBoxW: boxW, initialBoxH: boxH }
           );
         },
+      },
+      {
+        label: 'Insert Clip Art…',
+        shortcut: 'Ctrl+Shift+I',
+        action: () => window._showClipartPanel?.(s),
+      },
+      {
+        label: 'Insert WordArt…',
+        shortcut: 'Ctrl+Shift+W',
+        action: () => window._showWordArtPanel?.(s),
       },
       { separator: true },
       {
