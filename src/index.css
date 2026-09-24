@@ -265,7 +265,7 @@ html, body {
   gap: 6px;
   padding: 0 12px 0 14px;
   min-width: 100px;
-  max-width: 200px;
+  max-width: 320px;
   border-right: 1px solid var(--panel-border);
   cursor: pointer;
   color: var(--text-muted);
@@ -369,14 +369,23 @@ html, body {
 #canvas-area.panning { cursor: grab !important; }
 #canvas-area.panning:active { cursor: grabbing !important; }
 #canvas-area[data-tool="zoom"] { cursor: zoom-in; }
-#canvas-area[data-tool="eyedropper"] { cursor: crosshair; }
+#canvas-area[data-tool="text"] { cursor: text; }
+#canvas-area[data-tool="move"] { cursor: move; }
+#canvas-area[data-tool="cursor"] { cursor: default; }
+
 #canvas-area[data-tool="brush"],
 #canvas-area[data-tool="eraser"],
-#canvas-area[data-tool="blur"] { cursor: crosshair; }
-#canvas-area[data-tool="shape"],
+#canvas-area[data-tool="blur"],
+#canvas-area[data-tool="clone"],
+#canvas-area[data-tool="heal"],
+#canvas-area[data-tool="bucket"],
+#canvas-area[data-tool="eyedropper"],
 #canvas-area[data-tool="marquee"],
+#canvas-area[data-tool="lasso"],
+#canvas-area[data-tool="wand"],
+#canvas-area[data-tool="crop"],
+#canvas-area[data-tool="shape"],
 #canvas-area[data-tool="gradient"] { cursor: crosshair; }
-#canvas-area[data-tool="text"] { cursor: crosshair; }
 #canvas-area.drop-target { outline: 2px dashed var(--accent); outline-offset: -4px; }
 
 /* Zoom info overlay */

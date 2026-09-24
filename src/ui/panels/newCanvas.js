@@ -646,6 +646,7 @@ export function showNewCanvasPanel(session, onCreated, opts = {}) {
     const finalPpi = Math.max(1, Math.min(1200, Math.round(config.ppi || 72)));
     const bg = config.bgOption || 'white';
     const customBg = config.customBgColor || '#ffffff';
+    const finalDocName = (docNameInput?.value || config?.docName || '').trim() || 'Untitled';
 
     addRecentCanvasSize({
       label: config.label || `${finalW} × ${finalH} px @ ${finalPpi} ppi`,
@@ -656,9 +657,10 @@ export function showNewCanvasPanel(session, onCreated, opts = {}) {
       bgOption: bg,
       customBgColor: customBg,
       isCustom: config.isCustom,
+      docName: finalDocName,
     });
 
-    session.createDefaultDocument(finalW, finalH, finalPpi, bg, customBg);
+    session.createDefaultDocument(finalW, finalH, finalPpi, bg, customBg, finalDocName);
     close();
     onCreated?.();
   };

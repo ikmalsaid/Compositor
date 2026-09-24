@@ -114,9 +114,15 @@ function createWindow() {
     mainWindow.webContents.send('app:before-close');
   });
 
+  app.on('before-quit', (e) => {
+    if (isClosingConfirmed) return;
+    e.preventDefault();
+    mainWindow?.webContents?.send('app:before-close');
+  });
+
   ipcMain.on('app:confirm-close', () => {
     isClosingConfirmed = true;
-    mainWindow.destroy();
+    app.quit();
   });
 
   buildMenu();
@@ -169,7 +175,7 @@ function buildMenu(enabled = isAppReady) {
         { type: 'separator' },
         { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', enabled, click: () => send('menu:close-tab') },
         { type: 'separator' },
-        { role: 'quit' },
+        { label: 'Exit', accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Alt+F4', enabled, click: () => { mainWindow?.close(); } },
       ],
     },
     {

@@ -62,9 +62,9 @@ export async function showJpegExportPanel(session, canvasView) {
 
   overlay.querySelector('#je-export').addEventListener('click', async () => {
     const quality = parseInt(slider.value) / 100;
-    const name = session.projectURL
+    const name = session.document?.name || (session.projectURL
       ? session.projectURL.split(/[/\\]/).pop().replace(/\.compositor$/, '')
-      : 'Untitled';
+      : 'Untitled');
     const filePath = await window.api.saveExportDialog(name, 'jpg');
     if (!filePath) return;
     close();
@@ -82,9 +82,9 @@ export async function showJpegExportPanel(session, canvasView) {
 export async function showPngExportPanel(session, canvasView) {
   const doc = session.document;
   if (!doc) return;
-  const name = session.projectURL
+  const name = session.document?.name || (session.projectURL
     ? session.projectURL.split(/[/\\]/).pop().replace(/\.compositor$/, '')
-    : 'Untitled';
+    : 'Untitled');
   const filePath = await window.api.saveExportDialog(name, 'png');
   if (!filePath) return;
 

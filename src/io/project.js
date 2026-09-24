@@ -18,6 +18,7 @@ export async function saveProject(session, filePath) {
     colorSpace:    'sRGB',
     resolution:    doc.resolution,
     documentID:    doc.id,
+    name:          doc.name,
     width:         doc.width,
     height:        doc.height,
     activeLayerID: session.activeLayerID,
@@ -38,6 +39,8 @@ export async function saveProject(session, filePath) {
   if (!res.ok) { console.error('Save failed:', res.error); return false; }
 
   session.projectURL = filePath;
+  const fileName = filePath ? filePath.split(/[/\\]/).pop().replace(/\.compositor$/, '') : '';
+  if (fileName && doc) doc.name = fileName;
   session.history.markSaved();
   session.isModified = false;
   session._emit('change');
@@ -83,8 +86,10 @@ export async function loadProject(session, filePath) {
     }));
   }
 
+  const fileName = filePath ? filePath.split(/[/\\]/).pop().replace(/\.compositor$/, '') : 'Untitled';
   const doc = new CanvasDocument({
     id:         manifest.documentID,
+    name:       manifest.name || fileName,
     width:      manifest.width,
     height:     manifest.height,
     resolution: manifest.resolution ?? 72,

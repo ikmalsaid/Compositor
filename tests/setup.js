@@ -371,14 +371,35 @@ class MockElement {
     }
   }
 
-  click() {
-    const event = { target: this, preventDefault() {}, stopPropagation() {} };
-    for (const fn of (this._listeners['click'] || [])) {
-      fn(event);
+  replaceWith(newEl) {
+    if (this.parentNode) {
+      const idx = this.parentNode.children.indexOf(this);
+      if (idx !== -1) {
+        this.parentNode.children[idx] = newEl;
+        newEl.parentNode = this.parentNode;
+        this.parentNode = null;
+      }
     }
   }
 
+  dispatchEvent(event) {
+    const type = event?.type;
+    if (type && this._listeners[type]) {
+      const e = { ...event, target: this, preventDefault() {}, stopPropagation() {} };
+      for (const fn of [...this._listeners[type]]) {
+        fn(e);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  click() {
+    this.dispatchEvent({ type: 'click' });
+  }
+
   focus() {}
+  select() {}
 
   getBoundingClientRect() {
     return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight, right: this.clientWidth, bottom: this.clientHeight };
@@ -388,6 +409,10 @@ class MockElement {
 // Polyfill globals for Node.js
 if (typeof globalThis.ImageData === 'undefined') {
   globalThis.ImageData = MockImageData;
+}
+
+if (typeof globalThis.OffscreenCanvas === 'undefined') {
+  globalThis.OffscreenCanvas = MockCanvas;
 }
 
 if (typeof globalThis.document === 'undefined') {
@@ -422,11 +447,27 @@ if (typeof globalThis.document === 'undefined') {
 }
 
 if (typeof globalThis.window === 'undefined') {
+  const _winListeners = {};
   globalThis.window = {
     innerWidth: 1280,
     innerHeight: 800,
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener(event, fn) {
+      if (!_winListeners[event]) _winListeners[event] = [];
+      _winListeners[event].push(fn);
+    },
+    removeEventListener(event, fn) {
+      if (_winListeners[event]) {
+        _winListeners[event] = _winListeners[event].filter(h => h !== fn);
+      }
+    },
+    dispatchEvent(e) {
+      const type = e?.type;
+      if (type && _winListeners[type]) {
+        for (const fn of [..._winListeners[type]]) fn(e);
+        return true;
+      }
+      return false;
+    },
     api: null,
   };
 }

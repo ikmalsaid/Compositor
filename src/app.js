@@ -451,27 +451,35 @@ function bindMenuEvents() {
   on('menu:remove-bg',        () => removeBackground(session));
 
   // Before-close: confirm unsaved changes with Save / Don't Save / Cancel
+  let isClosingInProgress = false;
   on('app:before-close', async () => {
-    const dirtyTabs = tabs.tabs.filter(t => t.modified || t.session?.isModified || (t.session?.history?.canUndo ?? false));
-    if (dirtyTabs.length === 0) {
-      window.api?.confirmClose();
-      return;
-    }
-    for (const tab of dirtyTabs) {
-      const choice = await showCloseDialog(
-        'Save changes before closing?',
-        `Do you want to save the changes made to "${tab.title}"? Your changes will be lost if you don't save.`,
-        tab.title
-      );
-      if (choice === 'save') {
-        const saved = await saveTabSession(tab.session, tab.title);
-        if (!saved) return; // user cancelled save dialog -> don't close app
-      } else if (choice === 'cancel') {
-        return; // cancel close
+    if (isClosingInProgress) return;
+    isClosingInProgress = true;
+    try {
+      const dirtyTabs = tabs.tabs.filter(t => t.modified || t.session?.isModified || (t.session?.history?.canUndo ?? false));
+      if (dirtyTabs.length === 0) {
+        window.api?.confirmClose();
+        return;
       }
-      // 'discard' continues to next dirty tab
+      for (const tab of dirtyTabs) {
+        tabs._selectTab(tab.id);
+        const choice = await showCloseDialog(
+          'Save changes before closing?',
+          `Do you want to save the changes made to "${tab.title}"? Your changes will be lost if you don't save.`,
+          tab.title
+        );
+        if (choice === 'save') {
+          const saved = await saveTabSession(tab.session, tab.title);
+          if (!saved) return; // user cancelled save dialog -> don't close app
+        } else if (choice === 'cancel') {
+          return; // cancel close
+        }
+        // 'discard' continues to next dirty tab
+      }
+      window.api?.confirmClose();
+    } finally {
+      isClosingInProgress = false;
     }
-    window.api?.confirmClose();
   });
 }
 
@@ -483,15 +491,15 @@ function showCloseDialog(customTitle, customMessage, docNameOverride) {
   return new Promise((resolve) => {
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-overlay';
-    backdrop.style.cssText = 'position:fixed;inset:0;z-index:99000;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);animation:fadeIn .15s ease';
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:99000;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);opacity:1;animation:fadeIn .15s ease forwards;';
 
     const dlg = document.createElement('div');
     dlg.className = 'modal';
-    dlg.style.cssText = 'background:#1a1b22;border:1px solid rgba(255,255,255,0.12);border-radius:10px;box-shadow:0 18px 48px rgba(0,0,0,0.7);width:380px;font-family:var(--font-sans);color:#e0e0e0;padding:20px;display:flex;flex-direction:column;gap:14px;animation:te-dialog-in .15s cubic-bezier(.22,1,.36,1)';
+    dlg.style.cssText = 'background:#1a1b22;border:1px solid rgba(255,255,255,0.14);border-radius:10px;box-shadow:0 18px 48px rgba(0,0,0,0.8);width:380px;font-family:var(--font-sans);color:#e0e0e0;padding:20px;display:flex;flex-direction:column;gap:14px;opacity:1;animation:te-dialog-in .15s cubic-bezier(.22,1,.36,1) forwards;outline:none;';
 
     const docName = docNameOverride || (session?.projectURL
-      ? session.projectURL.split(/[/\\]/).pop()
-      : 'Untitled');
+      ? session.projectURL.split(/[/\\]/).pop().replace(/\.compositor$/, '')
+      : (session?.document?.name || 'Untitled'));
 
     const titleText = customTitle || 'Save changes before closing?';
     const msgText = customMessage || `Do you want to save the changes made to "${docName}"? Your changes will be lost if you don't save.`;
@@ -509,24 +517,40 @@ function showCloseDialog(customTitle, customMessage, docNameOverride) {
     `;
 
     backdrop.appendChild(dlg);
-    document.body.appendChild(backdrop);
+    const mount = document.getElementById('modal-root') || document.body;
+    mount.appendChild(backdrop);
 
-    const onKey = (e) => {
-      if (e.key === 'Escape') pick('cancel');
-      if (e.key === 'Enter')  pick('save');
-    };
-
+    let resolved = false;
     const pick = (val) => {
-      document.removeEventListener('keydown', onKey);
+      if (resolved) return;
+      resolved = true;
+      document.removeEventListener('keydown', onKey, true);
       backdrop.remove();
       resolve(val);
+    };
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); pick('cancel'); }
+      if (e.key === 'Enter')  { e.preventDefault(); e.stopPropagation(); pick('save'); }
     };
 
     dlg.querySelector('#cls-save').onclick    = () => pick('save');
     dlg.querySelector('#cls-discard').onclick = () => pick('discard');
     dlg.querySelector('#cls-cancel').onclick  = () => pick('cancel');
-    backdrop.addEventListener('click', e => { if (e.target === backdrop) pick('cancel'); });
-    document.addEventListener('keydown', onKey);
+
+    // Do not dismiss on backdrop click for critical save/exit confirmation; re-focus dialog
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) {
+        dlg.style.animation = 'none';
+        void dlg.offsetHeight;
+        dlg.style.animation = 'te-dialog-in .15s cubic-bezier(.22,1,.36,1) forwards';
+      }
+    });
+
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => {
+      dlg.querySelector('#cls-save')?.focus?.();
+    }, 20);
   });
 }
 
@@ -536,7 +560,7 @@ async function saveTabSession(targetSession, tabTitle) {
     await saveProject(targetSession, targetSession.projectURL);
     return true;
   } else {
-    const name = tabTitle || (targetSession.projectURL ? targetSession.projectURL.split(/[/\\]/).pop().replace(/\.compositor$/, '') : 'Untitled');
+    const name = targetSession.document?.name || tabTitle || 'Untitled';
     const path = await window.api?.saveProjectDialog(name);
     if (!path) return false;
     await saveProject(targetSession, path);
@@ -553,14 +577,14 @@ function showNewCanvas() {
     onBeforeCreate: async () => {
       const isDirty = Boolean(session.isModified || tabs.activeTab?.modified || session.history?.canUndo);
       if (!isDirty) return true;
-      const docName = tabs.activeTab?.title || 'Untitled';
+      const docName = session.document?.name || tabs.activeTab?.title || 'Untitled';
       const choice = await showCloseDialog(
         'Save changes before creating a new canvas?',
         `Do you want to save the changes made to "${docName}"? Your changes will be lost if you don't save.`,
         docName
       );
       if (choice === 'save') {
-        const saved = await saveTabSession(session, tabs.activeTab?.title);
+        const saved = await saveTabSession(session, tabs.activeTab?.title || session.document?.name);
         return Boolean(saved); // Abort if user cancelled the save dialog
       } else if (choice === 'discard') {
         return true;
@@ -587,14 +611,14 @@ async function doOpen() {
 
 async function doSave() {
   if (!session.document) return;
-  await saveTabSession(session, tabs.activeTab?.title);
+  await saveTabSession(session, tabs.activeTab?.title || session.document?.name);
 }
 
 async function doSaveAs() {
   if (!session.document) return;
-  const name = session.projectURL
+  const name = session.document?.name || (session.projectURL
     ? session.projectURL.split(/[/\\]/).pop().replace(/\.compositor$/, '')
-    : 'Untitled';
+    : (tabs.activeTab?.title || 'Untitled'));
   const path = await window.api.saveProjectDialog(name);
   if (!path) return;
   await saveProject(session, path);

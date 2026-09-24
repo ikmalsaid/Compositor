@@ -65,6 +65,7 @@ export class EditorSession extends EventTarget {
     this.tool          = Tool.CURSOR;
     this.projectURL    = null;      // file path | null
     this.isModified    = false;
+    this.viewScale     = 1.0;
 
     // Color palette (default black main foreground, white background)
     this.fgColor       = '#000000';
@@ -133,6 +134,10 @@ export class EditorSession extends EventTarget {
     this.dispatchEvent(new CustomEvent(type, { detail }));
   }
 
+  emit(type = 'change', detail = {}) {
+    this._emit(type, detail);
+  }
+
   on(type, handler) { this.addEventListener(type, handler); }
   off(type, handler) { this.removeEventListener(type, handler); }
 
@@ -199,8 +204,8 @@ export class EditorSession extends EventTarget {
 
   // ─── Document creation ──────────────────────────────────────────────────────
 
-  newDocument(width, height, resolution = 72) {
-    this.document = new CanvasDocument({ width, height, resolution });
+  newDocument(width, height, resolution = 72, name = 'Untitled') {
+    this.document = new CanvasDocument({ name, width, height, resolution });
     this.activeLayerID = null;
     this.selectedLayerIDs = new Set();
     this.selectionRect = null;
@@ -212,9 +217,18 @@ export class EditorSession extends EventTarget {
     this._emit('canvas-dirty');
   }
 
+  /** Set active document name and notify listeners */
+  setDocumentName(name) {
+    if (!this.document) return;
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    this.document.name = trimmed;
+    this._emit('change');
+  }
+
   /** Create a new document with options for background fill */
-  createDefaultDocument(width = 1920, height = 1080, resolution = 72, bgOption = 'white', customColor = '#ffffff') {
-    this.document = new CanvasDocument({ width, height, resolution });
+  createDefaultDocument(width = 1920, height = 1080, resolution = 72, bgOption = 'white', customColor = '#ffffff', name = 'Untitled') {
+    this.document = new CanvasDocument({ name, width, height, resolution });
     const bgCanvas = document.createElement('canvas');
     bgCanvas.width = width;
     bgCanvas.height = height;
@@ -380,29 +394,25 @@ export class EditorSession extends EventTarget {
     if (!this.document) return;
     const doc = this.document;
 
-    // Canvas-filling layers (for brush/eraser/shape/gradient tools) use fullCanvas:true.
     // Explicit bounds can be passed with opts.x, opts.y, opts.w, opts.h.
-    // A plain user-created layer defaults to ~50% canvas size, centered.
+    // Otherwise, newly created layers default to full canvas size at origin (0, 0).
     let lw, lh, lx, ly;
     if (opts.x !== undefined && opts.y !== undefined && opts.w !== undefined && opts.h !== undefined) {
       lw = Math.max(1, Math.round(opts.w));
       lh = Math.max(1, Math.round(opts.h));
       lx = Math.round(opts.x);
       ly = Math.round(opts.y);
-    } else if (opts.fullCanvas) {
-      lw = doc.width;  lh = doc.height;
-      lx = 0;          ly = 0;
     } else {
-      lw = Math.max(400, Math.round(doc.width  * 0.5));
-      lh = Math.max(300, Math.round(doc.height * 0.5));
-      lw = Math.min(lw, doc.width);
-      lh = Math.min(lh, doc.height);
-      lx = Math.round((doc.width  - lw) / 2);
-      ly = Math.round((doc.height - lh) / 2);
+      lw = doc.width;
+      lh = doc.height;
+      lx = 0;
+      ly = 0;
     }
 
+    const finalName = name === 'Layer' ? this.getNextLayerName('Layer') : name;
+
     const layer = new ImageLayer({
-      name,
+      name: finalName,
       pixelW: lw,
       pixelH: lh,
       transform: new LayerTransform({ x: lx, y: ly, w: lw, h: lh }),

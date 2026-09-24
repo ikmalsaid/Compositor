@@ -28,6 +28,9 @@ const testFiles = [
   path.join(__dirname, 'gradient.test.js'),
   path.join(__dirname, 'tabs.test.js'),
   path.join(__dirname, 'bucket.test.js'),
+  path.join(__dirname, 'docName.test.js'),
+  path.join(__dirname, 'layerExit.test.js'),
+  path.join(__dirname, 'canvasTitleResize.test.js'),
 ];
 
 const stream = run({

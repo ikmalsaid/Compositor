@@ -64,6 +64,9 @@ export class CanvasView {
     this._antsAnimId = null;
 
     this._initResizeObserver();
+    window.addEventListener('resize', () => {
+      this.zoomToFit();
+    });
     this._bindScrollbarEvents();
     this._bindEvents();
     this._bindSession();
@@ -94,6 +97,12 @@ export class CanvasView {
     this._session = s;
     if (this.rulerView) this.rulerView.session = s;
     if (s) {
+      if (s.viewScale) {
+        this.scale = s.viewScale;
+      } else {
+        s.viewScale = this.scale;
+      }
+      this._notifyZoomChange();
       this._sessionHandlers = {
         dirty: () => this._markDirty(),
         change: () => this._updateAreaTool(),
@@ -176,10 +185,10 @@ export class CanvasView {
     // Menu zoom commands (bind once)
     if (!this._menuBound) {
       this._menuBound = true;
-      window.api?.onMenu('menu:zoom-in', () => this.zoomBy(ZOOM_STEP));
-      window.api?.onMenu('menu:zoom-out', () => this.zoomBy(1 / ZOOM_STEP));
-      window.api?.onMenu('menu:zoom-fit', () => this.zoomToFit());
-      window.api?.onMenu('menu:zoom-100', () => this.zoomTo(1));
+      window.api?.onMenu?.('menu:zoom-in', () => this.zoomBy(ZOOM_STEP));
+      window.api?.onMenu?.('menu:zoom-out', () => this.zoomBy(1 / ZOOM_STEP));
+      window.api?.onMenu?.('menu:zoom-fit', () => this.zoomToFit());
+      window.api?.onMenu?.('menu:zoom-100', () => this.zoomTo(1));
     }
   }
 
@@ -1176,14 +1185,9 @@ export class CanvasView {
         const newH = entry.contentRect.height;
         if (newW > 0 && newH > 0) {
           if (this._lastAreaW > 0 && this._lastAreaH > 0 && (newW !== this._lastAreaW || newH !== this._lastAreaH)) {
-            const dw = newW - this._lastAreaW;
-            const dh = newH - this._lastAreaH;
-            // Keep the canvas anchored in center of viewport on resize / maximize / sidebar drag
-            this.tx += Math.round(dw / 2);
-            this.ty += Math.round(dh / 2);
             this._lastAreaW = newW;
             this._lastAreaH = newH;
-            this._markDirty();
+            this.zoomToFit();
           } else {
             this._lastAreaW = newW;
             this._lastAreaH = newH;
@@ -1353,21 +1357,24 @@ export class CanvasView {
   }
 
   zoomToFit() {
-    const doc = this.session.document;
+    const doc = this.session?.document;
     if (!doc) return;
     const rect = this.area.getBoundingClientRect();
     const margin = 40;
-    const sx = (rect.width - margin * 2) / doc.width;
-    const sy = (rect.height - margin * 2) / doc.height;
-    const s = Math.min(sx, sy, 1);
+    const availW = Math.max(10, rect.width - margin * 2);
+    const availH = Math.max(10, rect.height - margin * 2);
+    const sx = availW / doc.width;
+    const sy = availH / doc.height;
+    const s = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(sx, sy)));
     this.scale = s;
     this.tx = Math.round((rect.width - doc.width * s) / 2);
     this.ty = Math.round((rect.height - doc.height * s) / 2);
+    this._notifyZoomChange();
     this._markDirty();
   }
 
   zoomTo(scale, screenX, screenY) {
-    const doc = this.session.document;
+    const doc = this.session?.document;
     if (!doc) return;
     const rect = this.area.getBoundingClientRect();
     const ox = screenX ?? (rect.width / 2);
@@ -1377,6 +1384,7 @@ export class CanvasView {
     this.tx = ox - (ox - this.tx) * (newScale / this.scale);
     this.ty = oy - (oy - this.ty) * (newScale / this.scale);
     this.scale = newScale;
+    this._notifyZoomChange();
     this._markDirty();
   }
 
@@ -1386,6 +1394,18 @@ export class CanvasView {
 
   screenToDoc(sx, sy) {
     return [(sx - this.tx) / this.scale, (sy - this.ty) / this.scale];
+  }
+
+  _notifyZoomChange() {
+    this._updateZoomLabel();
+    if (this.session) {
+      this.session.viewScale = this.scale;
+      if (typeof this.session._emit === 'function') {
+        this.session._emit('zoom-change', { scale: this.scale });
+      } else if (typeof this.session.emit === 'function') {
+        this.session.emit('zoom-change', { scale: this.scale });
+      }
+    }
   }
 
   _updateZoomLabel() {
@@ -1936,13 +1956,13 @@ export class CanvasView {
         }
         if (!cursor) {
           const hit = [...(this.session.document?.layers || [])].reverse().find(l => l.isVisible && !l.isLocked && !l.isGroup && l.transform.contains(dx, dy));
-          if (hit) cursor = 'grab';
+          cursor = hit ? 'grab' : 'move';
         }
-        this.area.style.cursor = cursor;
+        this.area.style.cursor = cursor || 'move';
       } else {
         this.area.style.cursor = '';
       }
-      if (t === Tool.BRUSH || t === Tool.ERASER || t === Tool.BLUR) {
+      if (t === Tool.BRUSH || t === Tool.ERASER || t === Tool.BLUR || t === Tool.CLONE || t === Tool.HEAL) {
         this._markDirty();
       }
       return;
@@ -2096,6 +2116,7 @@ export class CanvasView {
     }
 
     if (this._drag.type === 'cursor-marquee') {
+      this.area.style.cursor = 'crosshair';
       this._drag.currDX = dx;
       this._drag.currDY = dy;
       this._dirty = true;
